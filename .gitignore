@@ -1,0 +1,16 @@
+﻿# visual studio
+.vs
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.env
+.venv
+venv/
+ENV/
+
+
