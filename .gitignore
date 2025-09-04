@@ -13,4 +13,6 @@ __pycache__/
 venv/
 ENV/
 
-
+# Config locali e segreti
+token.txt
+config.json
