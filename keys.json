@@ -1,6 +1,7 @@
 {
   "DOMAIN_WHITELIST": {},
   "EXACT_KEYS": [
+    "feature",
     "fbclid",
     "gclid",
     "dclid",
@@ -43,7 +44,23 @@
     "campaign",
     "cid",
     "mbid",
-    "fbadid"
+    "fbadid",
+    "fbadid",
+    "placement",
+    "experiment",
+    "variant",
+    "abtest",
+    "module",
+    "component",
+    "context",
+    "clickid",
+    "reqid",
+    "flow_id",
+    "journey_id",
+    "share_id",
+    "share_link_id",
+    "open_id",
+    "session_id"
   ],
   "PREFIX_KEYS": [
     "utm_",

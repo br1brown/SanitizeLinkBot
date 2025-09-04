@@ -21,6 +21,7 @@ from urllib.parse import (
 import os 
 import sys
 import aiohttp
+import html
 import asyncio
 from urllib.parse import urljoin
 
@@ -46,7 +47,7 @@ from telegram.ext import (
 class Sanitizer:
     """
     Responsabile di: follow redirect, pulizia parametri di tracking, pulizia fragment.
-    Inietti le liste/insiemi dal config nel costruttore.
+    Inietti le liste/insiemi dal keys nel costruttore.
     """
     _TRAILING_PUNCT = ".,;:!?)”»’'\""
 
@@ -66,22 +67,22 @@ class Sanitizer:
         self.DOMAIN_WHITELIST = { (k or "").lower(): v for k, v in (domain_whitelist or {}).items() }
 
     def _da_rimuovere(self, key: str) -> bool:
-        k = (key or "").lower()
-        if k in self.EXACT_KEYS:
+        chiave_lower = (key or "").lower()
+        if chiave_lower in self.EXACT_KEYS:
             return True
-        if any(k.startswith(p) for p in self.PREFIX_KEYS):
+        if any(chiave_lower.startswith(p) for p in self.PREFIX_KEYS):
             return True
-        if any(k.endswith(s) for s in self.ENDS_WITH):
+        if any(chiave_lower.endswith(s) for s in self.ENDS_WITH):
             return True
         return False
 
-    async def segui_redirect(self, url: str, *, max_redirects: int = 10, timeout: int = 10) -> str:
+    async def segui_redirect(self, url: str, *, max_redirects: int = 10, timeout: int = 50) -> tuple[str, str | None]:
         """
-        Ritorna l'URL finale dopo aver seguito i redirect via HEAD (più veloce di GET).
-        In caso di errore restituisce l'URL passato.
+        Ritorna una tupla (url_finale, titolo_pagina).
+        Se non trova il titolo o c'è errore, titolo_pagina = None.
         """
         if not url:
-            return url
+            return url, None
 
         headers = {
             "User-Agent": (
@@ -99,43 +100,66 @@ class Sanitizer:
 
                 while redirects < max_redirects:
                     try:
-                        async with session.head(current, headers=headers, allow_redirects=False) as resp:
+                        async with session.head(
+                            current, headers=headers, allow_redirects=False
+                        ) as resp:
                             if resp.status not in (301, 302, 303, 307, 308):
-                                return current
+                                break
                             location = resp.headers.get("Location")
                             if not location:
-                                return current
+                                break
                             current = urljoin(current, location)
                             redirects += 1
                     except aiohttp.ClientError:
-                        return current
-                return current
+                        return current, None
+
+                # una volta trovato l'URL finale → GET per leggere il titolo
+                titolo = None
+                try:
+                    async with session.get(current, headers=headers) as resp:
+                        if resp.status == 200 and resp.content_type == "text/html":
+                            text = await resp.text(errors="ignore")
+                            match = re.search(r"<title>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
+                            if match:
+                                titolo = match.group(1).strip()
+                except Exception:
+                    pass
+
+                return current, titolo
         except Exception:
-            return url
+            return url, None
 
-    def _togli_punteggiatura(self, u: str) -> str:
-        while u and u[-1] in self._TRAILING_PUNCT:
-            u = u[:-1]
-        return u
+    def _togli_punteggiatura(self, url_corrente: str) -> str:
+        while url_corrente and url_corrente[-1] in self._TRAILING_PUNCT:
+            url_corrente = url_corrente[:-1]
+        return url_corrente
 
-    async def sanifica_url(self, raw_url: str) -> str:
+    async def sanifica_url(self, raw_url: str) -> tuple[str, str | None]:
         """
         Pulisce un URL: segue redirect, normalizza schema, rimuove parametri e frammenti di tracking.
+        Ritorna (url_pulito, titolo_pagina | None).
         """
         if not raw_url:
-            return raw_url
+            return raw_url, None
 
-        u = await self.segui_redirect(raw_url)
+        # aggiungi schema se mancante PRIMA di seguire i redirect
+        url_corrente = raw_url
+        if not re.match(r"^[a-zA-Z][a-zA-Z0-9+\-.]*://", url_corrente):
+            url_corrente = "https://" + url_corrente
 
-        # aggiungi schema se mancante
-        if not re.match(r"^[a-zA-Z][a-zA-Z0-9+\-.]*://", u):
-            u = "https://" + u
-
+        # ora segui i redirect e ottieni anche il titolo
         try:
-            parts = urlsplit(u)
+            final_url, title = await self.segui_redirect(url_corrente)  # segui_redirect ora deve restituire (url, title)
+        except Exception:
+            final_url, title = url_corrente, None
+
+        final_title = self._normalize_title(title)
+        
+        try:
+            parts = urlsplit(final_url)
             domain = parts.netloc.lower().lstrip("www.")
             if domain in self.DOMAIN_WHITELIST:
-                return self._togli_punteggiatura(u)
+                return self._togli_punteggiatura(final_url), final_title
 
             original_params = parse_qsl(parts.query, keep_blank_values=True)
             filtered_params = [(k, v) for (k, v) in original_params if not self._da_rimuovere(k)]
@@ -144,18 +168,27 @@ class Sanitizer:
             new_fragment = parts.fragment
             if new_fragment:
                 frag = new_fragment.lstrip("#").lower()
-                if frag.startswith(self.FRAG_KEYS):
+                # evita TypeError quando FRAG_KEYS è vuota e consenti match prefissi
+                if self.FRAG_KEYS and any(frag.startswith(pref) for pref in self.FRAG_KEYS):
                     new_fragment = ""
 
             pulito = urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, new_fragment))
-            return self._togli_punteggiatura(pulito)
+            return self._togli_punteggiatura(pulito), final_title
         except Exception:
-            return raw_url.strip()
+            return raw_url.strip(), final_title
 
-    async def pulizia_massiva(self, links: list[str]) -> list[str]:
+    async def pulizia_massiva(self, links: list[str]) -> list[tuple[str, str | None]]:
         return [await self.sanifica_url(u) for u in (links or [])]
-
-
+    
+    def _normalize_title(self, raw: str) -> str:
+        if not raw:
+            return None
+        # decodifica entità HTML (&amp;, &#39;, ecc.)
+        titolo_norm = html.unescape(raw)
+        # comprimi e rifila spazi/newline
+        titolo_norm = re.sub(r"\s+", " ", titolo_norm).strip()
+        # evita titoli “vuoti” dopo la pulizia
+        return titolo_norm or None
 
 class GetterUrl:
     """
@@ -215,15 +248,24 @@ class TelegramIO:
     """
     Utility I/O per Telegram: formattazione output, detection menzione, invio risposta.
     """
-
+    
     @staticmethod
-    def get_output(clean_links: list[str], *, header: str = "🔗 Link:") -> str:
+    def get_output(clean_links: list[tuple[str, str | None]],split = "\n", litemcheck = "\n") -> str:
         if not clean_links:
             return "0 link. 👀"
-        uniq = list(dict.fromkeys(clean_links))
+
+        uniq = list(dict.fromkeys(clean_links))  # deduplica mantenendo l’ordine
+
         if len(uniq) == 1:
-            return uniq[0]
-        lines = [header] + [f"- {u}" for u in uniq]
+            url, title = uniq[0]
+            return f"{title}{split}{url}" if title else url
+
+        lines = []
+        for url, title in uniq:
+            if title:
+                lines.append(f"{litemcheck}{title}{split}{url}")
+            else:
+                lines.append(f"{litemcheck}{url}")
         return "\n".join(lines)
 
     @staticmethod
@@ -252,17 +294,19 @@ class TelegramIO:
 
         return _check(msg.text, msg.entities) or _check(msg.caption, msg.caption_entities)
 
-    @staticmethod
-    async def send_risposta(msg, clean_links: list[str]) -> None:
-        text = TelegramIO.get_output(clean_links)
-        await msg.reply_text(text, disable_web_page_preview=len(clean_links) > 1)
-
-
 
 class TelegramHandlers:
     """
     Contiene gli handler PTB e orchestra GetterUrl + Sanitizer + TelegramIO.
     """
+    
+    async def pulisciEmanda(self, target, raw_links) -> None:
+        clean_links = await self.sanitizer.pulizia_massiva(raw_links)
+        text = TelegramIO.get_output(clean_links)
+        
+        await target.reply_text(text, disable_web_page_preview=len(clean_links) > 1)
+        
+
     def __init__(self, sanitizer: Sanitizer) -> None:
         self.sanitizer = sanitizer
 
@@ -279,8 +323,7 @@ class TelegramHandlers:
             await msg.reply_text("Non trovo link nel messaggio a cui stai rispondendo. 👀")
             return
 
-        clean_links = await self.sanitizer.pulizia_massiva(raw_links)
-        await TelegramIO.send_risposta(target, clean_links)
+        await self.pulisciEmanda(target,raw_links)
 
     async def handle_privato(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat = update.effective_chat
@@ -292,8 +335,7 @@ class TelegramHandlers:
         if not raw_links:
             return
 
-        clean_links = await self.sanitizer.pulizia_massiva(raw_links)
-        await TelegramIO.send_risposta(msg, clean_links)
+        await self.pulisciEmanda(msg,raw_links)
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
@@ -342,26 +384,26 @@ class TelegramHandlers:
 
 # Base dir e config
 BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+KEYS_PATH = os.path.join(BASE_DIR, "keys.json")
 TOKEN_PATH = os.path.join(BASE_DIR, "token.txt")
 
-def load_cfg():
+def load_keys():
     try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(KEYS_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
-        print("Manca config.json, crealo: "+ CONFIG_PATH)
+        print("Manca keys.json, crealo: "+ KEYS_PATH)
         sys.exit(1)
 
 async def main() -> None:
-    cfg = load_cfg()
+    keys = load_keys()
 
     sanitizer = Sanitizer(
-        exact_keys=set(cfg.get("EXACT_KEYS", [])),
-        prefix_keys=tuple(cfg.get("PREFIX_KEYS", [])),
-        ends_with=tuple(cfg.get("ENDS_WITH", [])),
-        frag_keys=tuple(cfg.get("FRAG_KEYS", [])),
-        domain_whitelist=cfg.get("DOMAIN_WHITELIST", {}),
+        exact_keys=set(keys.get("EXACT_KEYS", [])),
+        prefix_keys=tuple(keys.get("PREFIX_KEYS", [])),
+        ends_with=tuple(keys.get("ENDS_WITH", [])),
+        frag_keys=tuple(keys.get("FRAG_KEYS", [])),
+        domain_whitelist=keys.get("DOMAIN_WHITELIST", {}),
     )
     handlers = TelegramHandlers(sanitizer)
 
@@ -398,7 +440,7 @@ async def main() -> None:
     print("Bot in esecuzione… Premi Ctrl+C per uscire")
 
     await app.initialize()
-    me = await app.bot.get_me()
+    bot_info = await app.bot.get_me()
 
     await app.start()
     try:
