@@ -34,6 +34,7 @@ from telegram import (
 )
 from telegram.constants import ChatType  # enum con i tipi di chat (privata, gruppo, supergruppo)
 from telegram.ext import (
+    CommandHandler,  # per i comandi quelli con la barra
     Application,     # oggetto principale: costruisce e avvia il bot
     ContextTypes,    # tipi per il contesto passato ai callback
     MessageHandler,  # handler che esegue una funzione quando arriva un messaggio che matcha dei filtri
@@ -289,13 +290,54 @@ class TelegramHandlers:
         msg = update.effective_message
         raw_links = GetterUrl.url_da_msg(msg)
         if not raw_links:
-            await msg.reply_text("Mandami dei link e te li restituisco puliti. 🔧🔗")
             return
 
         clean_links = await self.sanitizer.pulizia_massiva(raw_links)
         await TelegramIO.send_risposta(msg, clean_links)
 
+    async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user = update.effective_user
+        text = (
+            f"👋 *Benvenuto {user.first_name}!* \n\n"
+            "Io sono *Sanitize Link* e mi occupo di pulire i link dai parametri di tracking, "
+            "seguendo automaticamente anche i redirect.\n\n"
+            "🔧 Invia /help per sapere come funziono."
+        )
+        await update.message.reply_text(
+            text,
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+        )
 
+    async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        bot_username = context.bot.username
+        if not bot_username:
+            me = await context.bot.get_me()
+            bot_username = me.username
+
+        mention_bot = f"@{bot_username}" if bot_username else "@..."
+
+
+        help_text = (
+            "ℹ️ *Come funziona Sanitize Link*\n\n"
+            "📌 *In privato*\n"
+            "Mandami un messaggio con uno o più link. Io li analizzerò e ti restituirò la versione pulita, "
+            "senza parametri di tracciamento e dopo aver seguito eventuali redirect.\n\n"
+            "👥 *Nei gruppi*\n"
+            f"Rispondi a un messaggio che contiene dei link e menzionami (`{mention_bot}`).\n"
+            "Io ripulirò i link di quel messaggio e te li manderò subito.\n\n"
+            "✅ *Cosa faccio*: \n"
+            "- Rimuovo parametri di tracking (utm, fbclid, ecc.)\n"
+            "- Seguo i redirect fino all'URL finale\n"
+            "- Rimuovo i frammenti inutili (#...)\n\n"
+            "👉 In questo modo ottieni link più brevi, leggibili e rispettosi della privacy.\n\n"
+            "📂 Codice sorgente: [GitHub](https://github.com/br1brown/SanitizeLinkBot.git)"
+        )
+        await update.message.reply_text(
+            help_text,
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+        )
 
 
 # Base dir e config
@@ -332,19 +374,31 @@ async def main() -> None:
 
     app = Application.builder().token(telegram_token).build()
 
-    # GRUPPI: testo o caption
-    group_filter = (filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION))
-    app.add_handler(MessageHandler(group_filter, handlers.handle_gruppi))
+    # Comandi base
+    app.add_handler(CommandHandler("start", handlers.cmd_start), group=0)
+    app.add_handler(CommandHandler("help", handlers.cmd_help), group=0)
+
+    # GRUPPI: testo o caption - NO COMANDI
+    group_filter = (
+        filters.ChatType.GROUPS
+        & (filters.TEXT | filters.CAPTION)
+        & ~filters.COMMAND            # escludi /help ecc.
+    )
+    app.add_handler(MessageHandler(group_filter, handlers.handle_gruppi), group=1)
 
     # PRIVATO: testo o caption
-    private_filter = (filters.ChatType.PRIVATE & (filters.TEXT | filters.CAPTION))
-    app.add_handler(MessageHandler(private_filter, handlers.handle_privato))
+    private_filter = (
+        filters.ChatType.PRIVATE
+        & (filters.TEXT | filters.CAPTION)
+        & ~filters.COMMAND            # escludi /help ecc.
+    )
+    app.add_handler(MessageHandler(private_filter, handlers.handle_privato), group=1)
+
 
     print("Bot in esecuzione… Premi Ctrl+C per uscire")
 
     await app.initialize()
     me = await app.bot.get_me()
-    print(f"Bot: @{me.username}")
 
     await app.start()
     try:
