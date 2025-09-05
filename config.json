@@ -1,0 +1,7 @@
+{
+  "split": "\n",
+  "litemcheck": "- ",
+  "show_title": true,
+  "max_redirects": 5,
+  "timeout_sec": 35
+}
