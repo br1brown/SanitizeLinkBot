@@ -1,7 +1,29 @@
 {
-  "split": "\n",
-  "litemcheck": "- ",
-  "show_title": true,
-  "max_redirects": 5,
-  "timeout_sec": 35
+  "Output": {
+    "split_linktitle": "\n",
+    "show_title": true,
+    "litemcheck": "\n",
+    "rowsplit": "\n\n"
+  },
+
+  "Redirect": {
+    "max_redirects": 8,
+    "timeout_sec": 30
+  },
+
+  "Batch": {
+    "max_concurrency": 6
+  },
+
+  "HTTP": {
+    "connections_per_host": 4
+  },
+
+  "Formatting": {
+    "trailing_punct": ".,;:!?)”»’'\""
+  },
+
+  "Logging": {
+    "level": "INFO"
+  }
 }

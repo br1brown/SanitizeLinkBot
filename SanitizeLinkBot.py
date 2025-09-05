@@ -30,8 +30,8 @@ from telegram.ext import (
 import logging
 
 # ---------- LOGGING SETUP "VERBOSO MA UTILE" ----------
-# Globale WARNING+: librerie esterne non sporcano la console.
-# Il logger del bot può essere abbassato via env LOG_LEVEL (default INFO).
+# Globale WARNING+: librerie esterne non sporcano la console
+# Il logger del bot può essere abbassato via env LOG_LEVEL (default INFO)
 _LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
     level=logging.WARNING,  # livello globale: WARNING+
@@ -50,33 +50,61 @@ logger.setLevel(getattr(logging, _LOG_LEVEL, logging.INFO))
 
 class AppConfig:
     """
-    Raccoglie sia config generica che parametri operativi con default chiari.
+    Raccoglie sia config generica che parametri operativi
     """
     def __init__(self, raw: dict) -> None:
-        # separatore titolo/url (es.: "\n" = a capo, oppure " — ")
-        self.split: str         = raw.get("split", "\n")
-        # prefisso elemento elenco (es.: "- " oppure "• ")
-        self.litemcheck: str    = raw.get("litemcheck", "- ")
-        # mostrare o meno il titolo pagina accanto al link
-        self.show_title: bool   = bool(raw.get("show_title", True))
-        # limite massimo redirect che seguiamo per evitare loop
-        self.max_redirects: int = int(raw.get("max_redirects", 10))
-        # timeout globale per le richieste HTTP
-        self.timeout_sec: int   = int(raw.get("timeout_sec", 50))
+        # Sezioni obbligatorie
+        out = raw["Output"]
+        red = raw["Redirect"]
+        bat = raw["Batch"]
+        http = raw["HTTP"]
+        fmt = raw["Formatting"]
+        # Logging può essere opzionale, ma dentro può mancare 'level'
+        log = raw.get("Logging", {})
+
+        # Output (obbligatori)
+        self.split_linktitle: str = out["split_linktitle"]
+        self.rowsplit: str = out["rowsplit"]
+        self.litemcheck: str = out["litemcheck"]
+        self.show_title: bool = bool(out["show_title"])
+
+        # Redirect (obbligatori)
+        self.max_redirects: int = int(red["max_redirects"])
+        self.timeout_sec: int   = int(red["timeout_sec"])
+
+        # Batch (obbligatorio)
+        self.max_concurrency: int = int(bat["max_concurrency"])
+
+        # HTTP (obbligatorio)
+        self.connections_per_host: int = int(http["connections_per_host"])  # nessun default: deve esserci
+
+        # Formatting (obbligatorio)
+        self.trailing_punct: str = fmt["trailing_punct"]
+
+        # Logging (opzionale, solo il livello può mancare)
+        self.log_level: Optional[str] = (log.get("level") or "").upper() if isinstance(log.get("level"), str) else None
 
     @classmethod
     def load(cls, path: str) -> 'AppConfig':
         logger.debug("Caricamento configurazione da file: %s", path)
-        conf = cls(load_json_file(path))
+        try:
+            conf = cls(load_json_file(path))
+        except KeyError as e:
+            # Errore chiaro: indica quale chiave manca
+            missing = str(e).strip("'")
+            raise RuntimeError(f"Config mancante o incompleta: chiave obbligatoria assente '{missing}' in {path}") from e
         logger.info("Configurazione applicativa caricata")
         logger.debug("Config dettagli: %s", conf)
         return conf
 
     def __repr__(self) -> str:
         return (
-            f"AppConfig(split={self.split!r}, litemcheck={self.litemcheck!r}, "
-            f"show_title={self.show_title}, max_redirects={self.max_redirects}, "
-            f"timeout_sec={self.timeout_sec})"
+            "AppConfig("
+            f"split_linktitle={self.split_linktitle!r}, rowsplit={self.rowsplit!r}, litemcheck={self.litemcheck!r}, show_title={self.show_title}, "
+            f"max_redirects={self.max_redirects}, timeout_sec={self.timeout_sec}, "
+            f"max_concurrency={self.max_concurrency}, connections_per_host={self.connections_per_host}, "
+            f"trailing_punct={self.trailing_punct!r}, log_level={self.log_level!r}"
+            ")"
         )
 
 
@@ -87,7 +115,7 @@ class Sanitizer:
     - Rimuove/normalizza fragment (#...)
     - Restituisce (url_pulito, titolo_opzionale)
 
-    Privacy: non logghiamo URL in INFO. I dettagli finiscono a DEBUG.
+    Privacy: non logghiamo URL in INFO. I dettagli finiscono a DEBUG
     """
     _TRAILING_PUNCT = ".,;:!?)”»’'\""
 
@@ -109,13 +137,21 @@ class Sanitizer:
         self.DOMAIN_WHITELIST = { (k or "").lower(): v for k, v in (domain_whitelist or {}).items() }
         self.conf = conf
         self._session: Optional[aiohttp.ClientSession] = None
+        # Usa la punteggiatura dal config (fallback al default di classe solo se stringa vuota)
+        self._TRAILING_PUNCT = conf.trailing_punct or self._TRAILING_PUNCT
 
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Lazy init della sessione HTTP condivisa."""
+        """Lazy init della sessione HTTP condivisa"""
         if self._session is None or self._session.closed:
-            logger.debug("Creo aiohttp.ClientSession (timeout=%ss)", self.conf.timeout_sec)
+            logger.debug(
+                "Creo aiohttp.ClientSession (timeout=%ss, limit_per_host=%s)",
+                self.conf.timeout_sec, self.conf.connections_per_host or "default"
+            )
             timeout_conf = aiohttp.ClientTimeout(total=self.conf.timeout_sec)
-            self._session = aiohttp.ClientSession(timeout=timeout_conf)
+            connector = aiohttp.TCPConnector(
+                limit_per_host=self.conf.connections_per_host if self.conf.connections_per_host > 0 else None
+            )
+            self._session = aiohttp.ClientSession(timeout=timeout_conf, connector=connector)
         return self._session
 
     async def close(self) -> None:
@@ -136,17 +172,17 @@ class Sanitizer:
 
     async def segui_redirect(self, url: str, *, fetch_title: bool = True) -> tuple[str, Optional[str]]:
         """
-        Ritorna (url_finale, titolo_pagina | None).
-        - Segue redirect HTTP multipli (HEAD + GET "leggeri") fino a max_redirects.
-        - Riconosce anche redirect via <meta http-equiv="refresh">.
-        - Se fetch_title=False evita il GET finale "pesante".
+        Ritorna (url_finale, titolo_pagina | None)
+        - Segue redirect HTTP multipli (HEAD + GET "leggeri") fino a max_redirects
+        - Riconosce anche redirect via <meta http-equiv="refresh">
+        - Se fetch_title=False evita il GET finale "pesante"
         """
         if not url:
             logger.debug("segui_redirect: URL vuoto")
             return url, None
 
         headers = {
-            "User-Agent": "...",
+            "User-Agent": "..",
             "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
@@ -165,15 +201,15 @@ class Sanitizer:
 
         def _meta_refresh_target(html_chunk: str, base_url: str) -> Optional[str]:
             """
-            Cerca <meta http-equiv="refresh" content="0; url=..."> nei primi KB.
-            Restituisce URL assoluto se presente.
+            Cerca <meta http-equiv="refresh" content="0; url=.."> nei primi KB
+            Restituisce URL assoluto se presente
             """
             flags = re.IGNORECASE
             m = re.search(r'<meta[^>]+http-equiv=["\']refresh["\'][^>]+content=["\']([^"\']+)["\']', html_chunk, flags)
             if not m:
                 return None
             content = m.group(1)
-            # formati tipici: "0;url=..." / "0; url='...'"
+            # formati tipici: "0;url=.." / "0; url='...'"
             m2 = re.search(r'url\s*=\s*[\'"]?([^\'";]+)', content, flags)
             if not m2:
                 return None
@@ -247,8 +283,8 @@ class Sanitizer:
 
     def _togli_punteggiatura(self, url_corrente: str) -> str:
         """
-        Alcuni URL possono avere punteggiatura terminale (es. in un testo, tipo '...') da togliere.
-        Gestiamo anche il caso delle parentesi chiuse in eccesso.
+        Alcuni URL possono avere punteggiatura terminale (es. in un testo, tipo '...') da togliere
+        Gestiamo anche il caso delle parentesi chiuse in eccesso
         """
         originale = url_corrente
         while url_corrente and url_corrente[-1] in self._TRAILING_PUNCT + "\u00A0":
@@ -261,7 +297,7 @@ class Sanitizer:
         return url_corrente
 
     def _normalize_title(self, raw: Optional[str]) -> Optional[str]:
-        """Normalizza titolo HTML: unescape entità e comprime whitespace."""
+        """Normalizza titolo HTML: unescape entità e comprime whitespace"""
         if not raw:
             return None
         titolo_norm = html.unescape(raw)
@@ -300,7 +336,7 @@ class Sanitizer:
 
         try:
             parts = urlsplit(final_url)
-            domain = parts.netloc.lower().lstrip("www.")
+            domain = parts.netloc.lower().lstrip("www")
             logger.debug(
                 "Parsing URL finale: domain=%s, path=%s, query=%s, fragment=%s",
                 domain, parts.path, parts.query, parts.fragment,
@@ -331,15 +367,15 @@ class Sanitizer:
 
     async def pulizia_massiva(self, links: list[str]) -> list[tuple[str, Optional[str]]]:
         """
-        Sanifica una lista di URL in parallelo (con semaforo per non esagerare).
-        Deduplica preservando l'ordine.
+        Sanifica una lista di URL in parallelo (con semaforo per non esagerare)
+        Deduplica preservando l'ordine
         """
         if not links:
             logger.debug("pulizia_massiva: lista vuota")
             return []
 
         logger.debug("Avvio pulizia massiva di %d link", len(links))
-        sem = asyncio.Semaphore(5)
+        sem = asyncio.Semaphore(self.conf.max_concurrency)
 
         async def _one(u: str):
             async with sem:
@@ -356,7 +392,7 @@ class Sanitizer:
 
 class GetterUrl:
     """
-    Estrazione URL: da testo grezzo e da entità Telegram (URL / TEXT_LINK).
+    Estrazione URL: da testo grezzo e da entità Telegram (URL / TEXT_LINK)
     parser di input
     """
     _URL_REGEX = re.compile(
@@ -374,7 +410,7 @@ class GetterUrl:
 
     @classmethod
     def estrai_urls(cls, text: Optional[str]) -> List[str]:
-        """Estrae URL testuali tramite regex robusta da messaggi normali/caption."""
+        """Estrae URL testuali tramite regex robusta da messaggi normali/caption"""
         if not text:
             return []
         urls = [m.group(0) for m in cls._URL_REGEX.finditer(text)]
@@ -384,8 +420,8 @@ class GetterUrl:
     @staticmethod
     def url_da_tg(text: Optional[str], entities: Optional[Iterable[MessageEntity]]) -> List[str]:
         """
-        Estrae URL da entità Telegram (MessageEntity.URL e MessageEntity.TEXT_LINK).
-        Questo copre i casi in cui Telegram riconosce l'URL anche senza testo esplicito.
+        Estrae URL da entità Telegram (MessageEntity.URL e MessageEntity.TEXT_LINK)
+        Questo copre i casi in cui Telegram riconosce l'URL anche senza testo esplicito
         """
         urls: List[str] = []
         if not text or not entities:
@@ -404,8 +440,8 @@ class GetterUrl:
     @classmethod
     def url_da_msg(cls, msg) -> List[str]:
         """
-        Entry-point unico per estrarre link da un messaggio Telegram (testo/caption + entità).
-        Ritorna una lista piatta di stringhe URL.
+        Entry-point unico per estrarre link da un messaggio Telegram (testo/caption + entità)
+        Ritorna una lista piatta di stringhe URL
         """
         found: List[str] = []
         if msg.text:
@@ -419,13 +455,13 @@ class GetterUrl:
 
 
 class TelegramIO:
-    """Utility I/O per Telegram: formattazione output e risposta."""
+    """Utility I/O per Telegram: formattazione output e risposta"""
 
     @staticmethod
     def get_output(clean_links: list[tuple[str, Optional[str]]], conf: AppConfig) -> str:
         """
-        Converte la lista (url, titolo?) in testo finale pronto da inviare su Telegram.
-        Rispetta la config: può includere titolo, separatore personalizzato e prefisso elenco.
+        Converte la lista (url, titolo?) in testo finale pronto da inviare su Telegram
+        Rispetta la config: può includere titolo, separatore personalizzato e prefisso elenco
         """
         if not clean_links:
             logger.debug("get_output: nessun link pulito")
@@ -434,26 +470,26 @@ class TelegramIO:
         lines = []
         for url, title in clean_links:
             if conf.show_title and title:
-                lines.append(f"{title}{conf.split}{url}")
+                lines.append(f"{title}{conf.split_linktitle}{url}")
             else:
                 lines.append(f"{url}")
 
-        output = f"\n{conf.litemcheck}".join(lines)
+        output = f"{conf.rowsplit}{conf.litemcheck}".join(lines)
         logger.debug("get_output: testo pronto (%d righe)", len(lines))
         return output
 
 
 class TelegramHandlers:
     """
-    Orchestrazione: GetterUrl + Sanitizer + Output.
-    INFO: un solo log “di business” per messaggio (gruppo o privato).
+    Orchestrazione: GetterUrl + Sanitizer + Output
+    INFO: un solo log “di business” per messaggio (gruppo o privato)
     """
     def __init__(self, sanitizer: Sanitizer, conf: AppConfig) -> None:
         self.sanitizer = sanitizer
         self.conf = conf
 
     async def _pulisci_e_manda(self, target, raw_links: List[str]) -> Tuple[int, int, Optional[int]]:
-        """Elabora e risponde. Ritorna (num_trovati, num_puliti, reply_msg_id)."""
+        """Elabora e risponde. Ritorna (num_trovati, num_puliti, reply_msg_id)"""
         num_trovati = len(raw_links)
         logger.debug("_pulisci_e_manda: %d link in ingresso", num_trovati)
         clean_links = await self.sanitizer.pulizia_massiva(raw_links)
@@ -466,8 +502,8 @@ class TelegramHandlers:
     @staticmethod
     def menzionato(msg, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """
-        Rileva se il bot è stato menzionato (solo quando richiesto).
-        Copre sia @username che menzione diretta (TEXT_MENTION con user id).
+        Rileva se il bot è stato menzionato (solo quando richiesto)
+        Copre sia @username che menzione diretta (TEXT_MENTION con user id)
         """
         bot_username = (context.bot.username or "").lower()
         bot_id = context.bot.id
@@ -496,9 +532,9 @@ class TelegramHandlers:
     async def handle_gruppi(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
         Handler per GRUPPI:
-        - Si attiva solo se il bot è menzionato e il messaggio è in reply a un altro messaggio.
-        - Estrae link dal messaggio a cui si è risposto.
-        - Restituisce i link puliti come risposta a quel messaggio.
+        - Si attiva solo se il bot è menzionato e il messaggio è in reply a un altro messaggio
+        - Estrae link dal messaggio a cui si è risposto
+        - Restituisce i link puliti come risposta a quel messaggio
         """
         msg = update.effective_message
         if not msg or not self.menzionato(msg, context):
@@ -540,7 +576,7 @@ class TelegramHandlers:
     async def handle_privato(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
         Handler per CHAT PRIVATE:
-        - Estrae link dal messaggio ricevuto e risponde subito con i link puliti.
+        - Estrae link dal messaggio ricevuto e risponde subito con i link puliti
         """
         if update.effective_chat.type != ChatType.PRIVATE:
             return
@@ -570,20 +606,20 @@ class TelegramHandlers:
         )
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Messaggio di benvenuto, tono amichevole + invito a /help."""
+        """Messaggio di benvenuto, tono amichevole + invito a /help"""
         user = update.effective_user
         text = (
             f"👋 *Benvenuto {user.first_name}!* \n\n"
             "Io sono *Sanitize Link* e pulisco i link dai parametri di tracking, "
             "seguendo automaticamente anche i redirect.\n\n"
-            "🔧 Invia /help per sapere come funziono."
+            "🔧 Invia /help per sapere come funziono"
         )
         await update.message.reply_text(text, parse_mode="Markdown", disable_web_page_preview=True)
 
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Istruzioni rapide d'uso per privato e gruppi."""
+        """Istruzioni rapide d'uso per privato e gruppi"""
         bot_username = context.bot.username or (await context.bot.get_me()).username
-        mention_bot = f"@{bot_username}" if bot_username else "@..."
+        mention_bot = f"@{bot_username}" if bot_username else "@.."
         help_text = (
             "ℹ️ *Come funziona Sanitize Link*\n\n"
             "📌 *In privato*\n"
@@ -612,8 +648,9 @@ TOKEN_PATH  = os.path.join(BASE_DIR, "token.txt")
 
 def load_json_file(path: str) -> dict:
     """
-    Carica JSON di configurazione/chiavi da file.
-    WARNING: in caso di JSON corrotto solleva eccezione esplicita (non silenziamo).
+    Carica JSON di configurazione/chiavi da file
+    WARNING: in caso di JSON corrotto solleva eccezione esplicita (non silenziamo)
+    Se il file non esiste, restituisce {}
     """
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -621,7 +658,7 @@ def load_json_file(path: str) -> dict:
             logger.debug("Caricato JSON da %s (chiavi: %s)", path, list(data.keys()))
             return data
     except FileNotFoundError:
-        logger.warning("File non trovato: %s (uso default vuoto)", path)
+        logger.warning("File non trovato: %s (verrà richiesto dalle chiavi obbligatorie)", path)
         return {}
     except json.JSONDecodeError as e:
         logger.error("Errore nel parsing JSON di %s: %s", path, e)
@@ -630,6 +667,13 @@ def load_json_file(path: str) -> dict:
 
 CONFIG = AppConfig.load(CONFIG_PATH)
 KEYS   = load_json_file(KEYS_PATH)
+
+# Applica livello logging da config se presente (conservativo: sovrascrive solo il logger del bot)
+if CONFIG.log_level:
+    try:
+        logger.setLevel(getattr(logging, CONFIG.log_level, logger.level))
+    except Exception:
+        pass
 
 
 def get_telegram_token() -> str:
@@ -645,7 +689,7 @@ def get_telegram_token() -> str:
             logger.info("Token Telegram letto da file token.txt")
             return token
     except FileNotFoundError as e:
-        logger.error("Token mancante. Imposta TELEGRAM_BOT_TOKEN o crea 'token.txt'.")
+        logger.error("Token mancante. Imposta TELEGRAM_BOT_TOKEN o crea 'token.txt'")
         raise RuntimeError("Missing TELEGRAM_BOT_TOKEN o 'token.txt'") from e
 
 
@@ -710,5 +754,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        # Graceful exit se viene premuto Ctrl+C in console.
-        print("\nInterrotto dall'utente (Ctrl+C).")
+        # Graceful exit se viene premuto Ctrl+C in console
+        print("\nInterrotto dall'utente (Ctrl+C)")
