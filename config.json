@@ -1,9 +1,6 @@
 {
   "Output": {
-    "split_linktitle": "\n",
-    "show_title": true,
-    "litemcheck": "\n",
-    "rowsplit": "\n\n"
+    "show_title": true
   },
 
   "Redirect": {
