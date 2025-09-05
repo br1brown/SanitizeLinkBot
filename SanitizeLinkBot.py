@@ -134,64 +134,116 @@ class Sanitizer:
         logger.debug("Parametro '%s' da rimuovere? %s", key, decision)
         return decision
 
-    async def segui_redirect(self, url: str) -> tuple[str, Optional[str]]:
+    async def segui_redirect(self, url: str, *, fetch_title: bool = True) -> tuple[str, Optional[str]]:
         """
-        Ritorna (url_finale, titolo_pagina | None). Qui gestiamo solo la parte "navigazione".
-        - Usiamo HEAD per scoprire redirect senza scaricare il body.
-        - Poi GET per leggere eventuale <title>.
+        Ritorna (url_finale, titolo_pagina | None).
+        - Segue redirect HTTP multipli (HEAD + GET "leggeri") fino a max_redirects.
+        - Riconosce anche redirect via <meta http-equiv="refresh">.
+        - Se fetch_title=False evita il GET finale "pesante".
         """
         if not url:
             logger.debug("segui_redirect: URL vuoto")
             return url, None
+
         headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/91.0.4472.124 Safari/537.36"
-            )
+            "User-Agent": "...",
+            "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
+
+        def _estrai_titolo(html_text: str) -> Optional[str]:
+            flags = re.IGNORECASE | re.DOTALL
+            # prima prova og:title
+            m = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\'](.*?)["\']', html_text, flags)
+            if m:
+                return html.unescape(re.sub(r"\s+", " ", m.group(1)).strip()) or None
+            # poi <title>
+            m = re.search(r"<title>(.*?)</title>", html_text, flags)
+            if m:
+                return html.unescape(re.sub(r"\s+", " ", m.group(1)).strip()) or None
+            return None
+
+        def _meta_refresh_target(html_chunk: str, base_url: str) -> Optional[str]:
+            """
+            Cerca <meta http-equiv="refresh" content="0; url=..."> nei primi KB.
+            Restituisce URL assoluto se presente.
+            """
+            flags = re.IGNORECASE
+            m = re.search(r'<meta[^>]+http-equiv=["\']refresh["\'][^>]+content=["\']([^"\']+)["\']', html_chunk, flags)
+            if not m:
+                return None
+            content = m.group(1)
+            # formati tipici: "0;url=..." / "0; url='...'"
+            m2 = re.search(r'url\s*=\s*[\'"]?([^\'";]+)', content, flags)
+            if not m2:
+                return None
+            return urljoin(base_url, m2.group(1).strip())
+
         try:
             session = await self._get_session()
             current = url
             redirects = 0
             logger.debug("Inizio follow redirect")
 
+            # --- LOOP HEAD: segue i redirect "classici" senza corpo ---
             while redirects < self.conf.max_redirects:
                 try:
-                    logger.debug("HEAD %s", current)
                     async with session.head(current, headers=headers, allow_redirects=False) as resp:
-                        status = resp.status
-                        location = resp.headers.get("Location")
-                        logger.debug("HEAD status=%s, location=%s", status, location)
-                        if status not in (301, 302, 303, 307, 308) or not location:
-                            break
-                        current = urljoin(current, location)
-                        redirects += 1
-                        logger.debug("Redirect #%s", redirects)
+                        loc = resp.headers.get("Location")
+                        if resp.status in (301, 302, 303, 307, 308) and loc:
+                            current = urljoin(current, loc)
+                            redirects += 1
+                            continue
+                except aiohttp.ClientError:
+                    # molti shortener non gestiscono HEAD: si passa al GET
+                    pass
+                break
+
+            # --- LOOP GET "leggero": segue ulteriori redirect + meta refresh ---
+            while redirects < self.conf.max_redirects:
+                try:
+                    async with session.get(
+                        current,
+                        headers={**headers, "Range": "bytes=0-4095"},
+                        allow_redirects=False,
+                    ) as resp:
+                        # redirect HTTP con Location
+                        loc = resp.headers.get("Location")
+                        if resp.status in (301, 302, 303, 307, 308) and loc:
+                            current = urljoin(current, loc)
+                            redirects += 1
+                            continue
+
+                        # prova meta refresh nei primi KB (senza leggere tutto)
+                        if resp.status == 200 and resp.content_type and resp.content_type.startswith("text/html"):
+                            chunk = await resp.text(errors="ignore")
+                            tgt = _meta_refresh_target(chunk, current)
+                            if tgt:
+                                current = tgt
+                                redirects += 1
+                                continue
                 except aiohttp.ClientError as e:
-                    logger.warning("Errore durante HEAD: %s (uso URL attuale)", e)
-                    return current, None
+                    logger.debug("GET leggero fallito su %s: %s", current, e)
+                break  # nessun redirect ulteriore rilevato
 
             titolo = None
-            try:
-                logger.debug("GET per titolo")
-                async with session.get(current, headers=headers) as resp:
-                    ct = resp.content_type
-                    logger.debug("GET status=%s, content_type=%s", resp.status, ct)
-                    if resp.status == 200 and ct and ct.startswith("text/html"):
-                        text = await resp.text(errors="ignore")
-                        m = re.search(r"<title>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
-                        if m:
-                            titolo = m.group(1).strip()
-                            logger.debug("Titolo pagina trovato")
-            except Exception as e:
-                logger.debug("Impossibile leggere titolo pagina: %s", e)
+            if fetch_title:
+                try:
+                    logger.debug("GET per titolo (finale)")
+                    async with session.get(current, headers=headers) as resp:
+                        if resp.status == 200 and resp.content_type and resp.content_type.startswith("text/html"):
+                            text = await resp.text(errors="ignore")
+                            titolo = _estrai_titolo(text)
+                except Exception as e:
+                    logger.debug("Impossibile leggere titolo: %s", e)
+                    return current, None
 
-            logger.debug("URL finale dopo redirect determinato")
             return current, titolo
+
         except Exception as e:
             logger.error("Errore imprevisto in segui_redirect: %s", e)
             return url, None
+
 
     def _togli_punteggiatura(self, url_corrente: str) -> str:
         """
@@ -235,18 +287,24 @@ class Sanitizer:
             url_corrente = "https://" + url_corrente
 
         try:
-            final_url, title = await self.segui_redirect(url_corrente)
+            # Evita di scaricare il titolo se show_title è False
+            final_url, title = await self.segui_redirect(url_corrente, fetch_title=self.conf.show_title)
         except Exception as e:
-            logger.warning("Errore durante follow redirect: %s (uso URL corrente)", e)
+            logger.info(f"HEAD fallito su {url_corrente}, provo fallback GET ({e})")
             final_url, title = url_corrente, None
 
-        final_title = self._normalize_title(title)
+        if not self.conf.show_title:
+            final_title = ""   # imposto stringa vuota
+        else:
+            final_title = self._normalize_title(title)
 
         try:
             parts = urlsplit(final_url)
             domain = parts.netloc.lower().lstrip("www.")
-            logger.debug("Parsing URL finale: domain=%s, path=%s, query=%s, fragment=%s",
-                         domain, parts.path, parts.query, parts.fragment)
+            logger.debug(
+                "Parsing URL finale: domain=%s, path=%s, query=%s, fragment=%s",
+                domain, parts.path, parts.query, parts.fragment,
+            )
 
             if domain in self.DOMAIN_WHITELIST:
                 logger.info("Dominio whitelisted: salto rimozione parametri")
