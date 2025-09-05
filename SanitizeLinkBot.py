@@ -27,7 +27,7 @@ import html
 
 from collections.abc import Iterable
 
-from telegram import Update, MessageEntity
+from telegram import Update, MessageEntity, ReactionTypeEmoji
 from telegram.constants import ChatType, ParseMode
 
 from telegram.ext import (
@@ -506,6 +506,13 @@ class TelegramHandlers:
             parse_mode=ParseMode.HTML
         )
         reply_id = getattr(reply, "message_id", None)
+
+        # rimozione dopo l'invio
+        try:
+            await self._react(target, None)
+        except Exception:
+            pass
+
         return num_trovati, len(clean_links), reply_id
 
     @staticmethod
@@ -530,6 +537,41 @@ class TelegramHandlers:
 
         return _check(msg.text, msg.entities) or _check(msg.caption, msg.caption_entities)
 
+    async def _react(self, message, emoji: str | None) -> bool:
+        """Imposta (o rimuove) una reaction sul messaggio target.
+        Ritorna True se l'operazione va a buon fine, False altrimenti (nessun messaggio di errore)."""
+        try:
+            if emoji:
+                await message.set_reaction([ReactionTypeEmoji(emoji)])
+            else:
+                await message.set_reaction([])  # rimuove tutte le reaction
+            return True
+        except Exception as e:
+            logger.debug("Impossibile impostare reaction %r: %s", emoji, e)
+            return False
+
+    async def presaInCarico(self, msg) -> list[str]:
+        """Acknowledge con 👀, estrai link; se vuoto, prova fallback reaction.
+        Non invia MAI messaggi. Ritorna la lista di link grezzi."""
+        # 1) acknowledge immediato
+        await self._react(msg, "👀")
+
+        # 2) estrazione link
+        raw_links = GetterUrl.url_da_msg(msg)
+
+        # 3) nessun link: gestisci solo reaction (NO messaggi)
+        if not raw_links:
+            ok = await self._react(msg, "❌")
+            if not ok:
+                ok = await self._react(msg, "👎")
+            if not ok:
+                # come ultima spiaggia, rimuovi reaction per non lasciare gli 👀 appesi
+                await self._react(msg, None)
+            return []
+
+        # link presenti: lascia gli 👀; il caller deciderà cosa fare dopo
+        return raw_links
+
     async def handle_gruppi(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Gestisce la menzione nei gruppi su messaggi in risposta."""
         msg = update.effective_message
@@ -541,16 +583,12 @@ class TelegramHandlers:
             return
 
         target = msg.reply_to_message
-        raw_links = GetterUrl.url_da_msg(target)
+        raw_links = await self.presaInCarico(target)
         user = update.effective_user
         chat = update.effective_chat
 
         if not raw_links:
-            await msg.reply_text(
-                "Non sono stati rilevati collegamenti nel messaggio a cui hai risposto.",
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
-            )
+            # già gestito da presaInCarico (solo reaction), ma aggiungo log
             logger.info(
                 "GRUPPO menzione: da '%s' (@%s) in '%s' — trovati=%d, puliti=%d, reply_msg_id=%s",
                 getattr(user, "full_name", "n/a"),
@@ -578,7 +616,7 @@ class TelegramHandlers:
         if update.effective_chat.type != ChatType.PRIVATE:
             return
         msg = update.effective_message
-        raw_links = GetterUrl.url_da_msg(msg)
+        raw_links = await self.presaInCarico(msg)
         user = update.effective_user
 
         if not raw_links:
