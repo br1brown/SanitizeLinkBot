@@ -4,7 +4,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>c1b2950f-74ca-4bdf-8a66-46c7ee15fe73</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>SanitizeLinkBot.py</StartupFile>
+    <StartupFile>main.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -21,7 +21,7 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="SanitizeLinkBot.py" />
+    <Compile Include="main.py" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="config.json" />
