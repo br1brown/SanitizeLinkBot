@@ -492,16 +492,18 @@ class GetterUrl:
 
     _URL_REGEX = re.compile(
         r"""
-        (?<!\w@)              # evita cose tipo user@host (non voglio toccare email/menzioni)
+        (?<![\w@])                # evita user@host e @menzioni
         (?:
-            https?://         # schema esplicito
-          | www\.             # o www.
-          | (?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63})  # dominio nudo tipo example.com
+            https?://             # schema esplicito (copre http e https)
+          | www\.
+          | (?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63})
         )
-        [^\s<>\'\"“”()]+      # il corpo dell'url (stop a spazi, virgolette, parentesi ecc)
+        [^\s<>"'“”()]+            # corpo base
+        (?:\([^\s<>"'“”()]*\)[^\s<>"'“”()]*)*   # consenti coppie di (...) nel path senza troncare
         """,
         re.IGNORECASE | re.VERBOSE
     )
+
 
     @classmethod
     def estrai_urls(cls, text: str | None) -> list[str]:
@@ -557,7 +559,7 @@ class TelegramIO:
         """inserisce zero-width space per evitare mention/hashtag/comandi involontari all'inizio parola"""
         if not s:
             return s
-        # qui uso zwsp per spezzare pattern che telegram riconoscerebbe (senza cambiare la resa visiva)
+        # qui uso zwsp per spezzare pattern che telegram riconoscerebbe
         s = re.sub(r'(?<!\S)@(\w+)', '@\u2060\\g<1>', s)   # @username -> @​username
         s = re.sub(r'(?<!\S)#(\w+)', '#\u2060\\g<1>', s)   # #hashtag -> #​hashtag
         s = re.sub(r'(?<!\S)/(\w+)', '/\u2060\\g<1>', s)   # /command -> /​command
