@@ -771,35 +771,16 @@ class TelegramHandlers:
         )
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """risposta al /start (breve welcome + istruzioni base)"""
         user = update.effective_user
-        first_name = html.escape(user.first_name) if user and user.first_name else "Utente"
-        text = (
-            f"<b>Benvenuto {first_name}.</b>\n\n"
-            "Sono <b>Sanitize Link</b>: rimuovo parametri di tracciamento dai collegamenti e seguo i redirect per restituire l'URL finale.\n\n"
-            "Invia /help per maggiori dettagli."
-        )
+        first_name = user.first_name if user and user.first_name else "Utente"
+        text = render_from_file("start", first_name=first_name)
         await update.message.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """risposta a /help (guida compatta, tono formale come in originale)"""
         bot_username = context.bot.username or (await context.bot.get_me()).username
         mention_bot = f"@{bot_username}" if bot_username else "@.."
-        help_text = (
-            "<b>Sanitize Link — Guida rapida</b>\n\n"
-            "<b>Uso in chat privata</b>\n"
-            "Invia un messaggio con uno o più collegamenti. Il sistema restituisce la versione pulita, priva di parametri di tracciamento, dopo aver seguito eventuali redirect.\n\n"
-            "<b>Uso nei gruppi</b>\n"
-            f"Rispondi a un messaggio contenente collegamenti e menziona il bot (<code>{html.escape(mention_bot)}</code>). Verranno inviati gli URL puliti relativi a quel messaggio.\n\n"
-            "<b>Operazioni effettuate</b>\n"
-            "• Rimozione di parametri di tracciamento (es. utm, fbclid)\n"
-            "• Follow dei redirect fino all'URL finale\n"
-            "• Rimozione di frammenti non necessari (#...)\n\n"
-            "<b>Vantaggi</b>\n"
-            "Collegamenti più brevi, leggibili e rispettosi della privacy.\n\n"
-            "Codice sorgente: <a href=\"https://github.com/br1brown/SanitizeLinkBot.git\">GitHub</a>"
-        )
-        await update.message.reply_text(help_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        text = render_from_file("help", mention_bot=mention_bot)
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 
 # ---------- PERCORSI CONFIG ----------
@@ -810,6 +791,15 @@ KEYS_PATH = os.path.join(BASE_DIR, "keys.json")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 TOKEN_PATH = os.path.join(BASE_DIR, "token.txt")
 
+
+def render_from_file(filename: str, **ctx) -> str:
+    """Carica templates/filename e applica .format(**ctx)."""
+    path = os.path.join(BASE_DIR, filename + ".html")
+    with open(path, "r", encoding="utf-8") as f:
+        s = f.read()
+    # Escape HTML solo sui valori stringa per sicurezza
+    safe_ctx = {k: (html.escape(v) if isinstance(v, str) else v) for k, v in ctx.items()}
+    return s.format(**safe_ctx)
 
 def load_json_file(path: str, *, required: bool = False) -> dict:
     """

@@ -1,0 +1,19 @@
+<b>Sanitize Link . Guida rapida</b>
+
+<b>Uso in chat privata</b>
+Invia un messaggio con uno o pi� collegamenti. Il sistema restituisce la versione pulita, priva di parametri di
+tracciamento, dopo aver seguito eventuali redirect.
+
+<b>Uso nei gruppi</b>
+Rispondi a un messaggio contenente collegamenti e menziona il bot (<code>{mention_bot}</code>). Verranno inviati gli URL
+puliti relativi a quel messaggio.
+
+<b>Operazioni effettuate</b>
+- Rimozione di parametri di tracciamento (es. utm, fbclid)
+- Follow dei redirect fino all'URL finale
+- Rimozione di frammenti non necessari (#...)
+
+<b>Vantaggi</b>
+Collegamenti più brevi, leggibili e rispettosi della privacy.
+
+Codice sorgente: <a href="https://github.com/br1brown/SanitizeLinkBot.git">GitHub</a>
