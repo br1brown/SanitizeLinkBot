@@ -8,10 +8,11 @@
   },
 
   "HTTP": {
-    "connections_per_host": 4,
-    "ttl_dns_cache": 300,
-    "max_redirects": 8,
-    "timeout_sec": 30
+    "connections_per_host": 10,
+    "ttl_dns_cache": 60,
+    "max_redirects": 5,
+    "timeout_sec": 12,
+    "validate_cleaned": true
   },
 
   "Formatting": {

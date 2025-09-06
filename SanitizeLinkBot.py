@@ -79,6 +79,8 @@ class AppConfig:
         self.ttl_dns_cache : int = int(http_conf["ttl_dns_cache"])
         self.max_redirects: int = int(http_conf["max_redirects"])
         self.timeout_sec:   int = int(http_conf["timeout_sec"])
+        self.validate_cleaned: bool = bool(http_conf.get("validate_cleaned", True))
+
 
         # formatting
         self.trailing_punct: str = str(formatting_conf["trailing_punct"])
@@ -201,7 +203,30 @@ class Sanitizer:
             await self._session.close()
             self._session = None
 
-    def _parametro_da_rimuovere(self, key: str) -> bool:
+    async def _check_url_ok(self, url: str) -> bool:
+        """
+        verifica che l'URL sia raggiungibile: se porta a 200/206/3xx è OK
+        se 4xx o errori di rete => non OK
+        """
+        try:
+            session = await self._get_session()
+            async with session.get(
+                url,
+                headers={"Range": "bytes=0-0"},
+                allow_redirects=True,  # seguiamo redirect per vedere se atterra bene
+                max_redirects=self.conf.max_redirects,
+            ) as resp:
+                # accetto 2xx e anche 3xx (il client finale seguirà)
+                if 200 <= resp.status < 300 or 300 <= resp.status < 400:
+                    return True
+                # alcuni siti rispondono 403 a bot/HEAD: considerali "sospetti ma accettabili"
+                if resp.status in (401, 403) and url.startswith(("http://", "https://")):
+                    return True
+                return False
+        except Exception:
+            return False
+
+    def is_parametro_da_rimuovere(self, key: str) -> bool:
         """decide se un parametro query deve sparire (match esatto, prefix o suffix)"""
         k = (key or "").lower()
         decision = (
@@ -389,7 +414,7 @@ class Sanitizer:
 
             # filtro parametri query
             original_params = parse_qsl(parts.query, keep_blank_values=True)
-            filtered_params = [(k, v) for (k, v) in original_params if not self._parametro_da_rimuovere(k)]
+            filtered_params = [(k, v) for (k, v) in original_params if not self.is_parametro_da_rimuovere(k)]
             new_query = urlencode(filtered_params, doseq=True)
 
             # gestisco fragment
@@ -401,6 +426,15 @@ class Sanitizer:
 
             pulito = urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, new_fragment))
             pulito = self._togli_punteggiatura_finale(pulito)
+           
+            if self.conf.validate_cleaned and pulito != final_url:
+                ok = await self._check_url_ok(pulito)
+                if not ok:
+                    logger.info("Validazione fallita per l'URL pulito; restituisco l'URL originale finale")
+                    # meglio restituire l'URL finale raggiunto dai redirect, senza alterazioni
+                    return self._togli_punteggiatura_finale(final_url), final_title
+
+            
             logger.debug("URL pulito prodotto")
             return pulito, final_title
         except Exception as e:
@@ -608,7 +642,7 @@ class TelegramHandlers:
         return num_trovati, len(clean_links), reply_id
 
     @staticmethod
-    def menzionato(msg, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    def is_menzionato(msg, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """controlla se nel messaggio compare una mention esplicita al bot (stringa o text_mention)"""
         bot_username = (context.bot.username or "").lower()
         bot_id = context.bot.id
@@ -669,7 +703,7 @@ class TelegramHandlers:
     async def handle_gruppi(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """gestisce menzioni in gruppi: funziona solo se rispondi a un messaggio e menzioni il bot"""
         msg = update.effective_message
-        if not msg or not self.menzionato(msg, context):
+        if not msg or not self.is_menzionato(msg, context):
             logger.debug("handle_gruppi: ignorato (nessuna menzione o messaggio nullo)")
             return
         if not msg.reply_to_message:
