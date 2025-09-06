@@ -1,19 +1,24 @@
-<b>Sanitize Link . Guida rapida</b>
+<b>Sanitize Link - Guida rapida</b>
 
-<b>Uso in chat privata</b>
-Invia un messaggio con uno o pi� collegamenti. Il sistema restituisce la versione pulita, priva di parametri di
-tracciamento, dopo aver seguito eventuali redirect.
+<b>Chat privata</b>
+Incolla uno o più link: ricevi la versione pulita, senza parametri di tracciamento e con l’URL finale. Se abilitato in configurazione, mostro anche il titolo della pagina.
 
-<b>Uso nei gruppi</b>
-Rispondi a un messaggio contenente collegamenti e menziona il bot (<code>{mention_bot}</code>). Verranno inviati gli URL
-puliti relativi a quel messaggio.
+<b>Nei gruppi</b>
+Rispondi a un messaggio che contiene link e menziona il bot (<code>{mention_bot}</code>). Invio i link sanificati di quel messaggio.
 
-<b>Operazioni effettuate</b>
-- Rimozione di parametri di tracciamento (es. utm, fbclid)
-- Follow dei redirect fino all'URL finale
-- Rimozione di frammenti non necessari (#...)
+<b>Ricerca inline</b>
+Scrivi <code>{mention_bot}</code> nella barra di testo di Telegram. In modalità inline viene sanificato solo il primo link rilevato.
 
-<b>Vantaggi</b>
-Collegamenti più brevi, leggibili e rispettosi della privacy.
+<b>Cosa faccio esattamente</b>
+- Rimuovo parametri di tracciamento (esempio: utm, fbclid, gclid)
+- Seguo i redirect fino alla destinazione finale (HTTP, meta refresh, redirect JavaScript comuni)
+- Elimino frammenti non necessari 
+- Controllo che il link pulito sia raggiungibile prima di inviarlo
+
+<b>Dettagli utili</b>
+- I link tipo mailto: e tel: non vengono modificati
+- Nei gruppi è necessario rispondere al messaggio che contiene i link e menzionare il bot
+- Se ci sono molti link, l’anteprima delle pagine può essere disattivata per migliorare la leggibilità
+
 
 Codice sorgente: <a href="https://github.com/br1brown/SanitizeLinkBot.git">GitHub</a>
