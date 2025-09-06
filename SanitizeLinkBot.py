@@ -190,7 +190,6 @@ class Sanitizer:
             connector = aiohttp.TCPConnector(
                 limit_per_host=self.conf.connections_per_host if self.conf.connections_per_host > 0 else None,
                 ttl_dns_cache = self.conf.ttl_dns_cache,
-                enable_http2 = True,
             )
             timeout_conf = aiohttp.ClientTimeout(total=self.conf.timeout_sec, connect=self.conf.timeout_sec/3)
             self._session = aiohttp.ClientSession(timeout=timeout_conf, connector=connector)
@@ -223,7 +222,7 @@ class Sanitizer:
                 if resp.status in (401, 403) and url.startswith(("http://", "https://")):
                     return True
                 return False
-        except Exception:
+        except Exception as e:
             return False
 
     def is_parametro_da_rimuovere(self, key: str) -> bool:
@@ -285,80 +284,81 @@ class Sanitizer:
 
         timeout = aiohttp.ClientTimeout(total=15)
 
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            while redirects < self.conf.max_redirects:
-                try:
-                    # primo tentativo: head
-                    async with session.head(current, allow_redirects=False) as resp:
-                        if resp.status in (301, 302, 303, 307, 308):
-                            loc = resp.headers.get("Location")
-                            if loc:
-                                current = urljoin(current, loc)
-                                redirects += 1
-                                continue
-                except aiohttp.ClientError:
-                    break
+        session = await self._get_session()
 
-                try:
-                    # get parziale per meta refresh o js redirect
-                    async with session.get(
-                        current,
-                        headers={"Range": "bytes=0-16383"},
-                        allow_redirects=False,
-                    ) as resp:
-                        if resp.status in (301, 302, 303, 307, 308):
-                            loc = resp.headers.get("Location")
-                            if loc:
-                                current = urljoin(current, loc)
-                                redirects += 1
-                                continue
-                        if resp.status == 200 and resp.content_type and resp.content_type.startswith("text/html"):
-                            text = await resp.text(errors="ignore")
-                            tgt = _meta_refresh_target(text, current) or _js_redirect_target(text, current)
-                            if tgt:
-                                current = tgt
-                                redirects += 1
-                                continue
-                except aiohttp.ClientError:
-                    break
+        while redirects < self.conf.max_redirects:
+            try:
+                # primo tentativo: head
+                async with session.head(current, allow_redirects=False) as resp:
+                    if resp.status in (301, 302, 303, 307, 308):
+                        loc = resp.headers.get("Location")
+                        if loc:
+                            current = urljoin(current, loc)
+                            redirects += 1
+                            continue
+            except aiohttp.ClientError:
+                break
 
-                # fallback: se host è uno shortener noto provo get completa
-                try:
-                    host = urlsplit(current).netloc.lower()
-                except Exception:
-                    host = ""
+            try:
+                # get parziale per meta refresh o js redirect
+                async with session.get(
+                    current,
+                    headers={"Range": "bytes=0-16383"},
+                    allow_redirects=False,
+                ) as resp:
+                    if resp.status in (301, 302, 303, 307, 308):
+                        loc = resp.headers.get("Location")
+                        if loc:
+                            current = urljoin(current, loc)
+                            redirects += 1
+                            continue
+                    if resp.status == 200 and resp.content_type and resp.content_type.startswith("text/html"):
+                        text = await resp.text(errors="ignore")
+                        tgt = _meta_refresh_target(text, current) or _js_redirect_target(text, current)
+                        if tgt:
+                            current = tgt
+                            redirects += 1
+                            continue
+            except aiohttp.ClientError:
+                break
 
-                try:
-                    async with session.get(current, allow_redirects=False) as resp:
-                        if resp.status in (301, 302, 303, 307, 308):
-                            loc = resp.headers.get("Location")
-                            if loc:
-                                current = urljoin(current, loc)
-                                redirects += 1
-                                continue
-                        if resp.status == 200 and resp.content_type and resp.content_type.startswith("text/html"):
-                            text_full = await resp.text(errors="ignore")
-                            tgt = _meta_refresh_target(text_full, current) or _js_redirect_target(text_full, current)
-                            if tgt:
-                                current = tgt
-                                redirects += 1
-                                continue
-                except aiohttp.ClientError:
-                    break
+            # fallback: se host è uno shortener noto provo get completa
+            try:
+                host = urlsplit(current).netloc.lower()
+            except Exception:
+                host = ""
 
-                break 
+            try:
+                async with session.get(current, allow_redirects=False) as resp:
+                    if resp.status in (301, 302, 303, 307, 308):
+                        loc = resp.headers.get("Location")
+                        if loc:
+                            current = urljoin(current, loc)
+                            redirects += 1
+                            continue
+                    if resp.status == 200 and resp.content_type and resp.content_type.startswith("text/html"):
+                        text_full = await resp.text(errors="ignore")
+                        tgt = _meta_refresh_target(text_full, current) or _js_redirect_target(text_full, current)
+                        if tgt:
+                            current = tgt
+                            redirects += 1
+                            continue
+            except aiohttp.ClientError:
+                break
 
-            # ultimo step: se richiesto, provo a leggere il titolo
-            if fetch_title:
-                try:
-                    async with session.get(current) as resp:
-                        if resp.status == 200 and resp.content_type and resp.content_type.startswith("text/html"):
-                            text = await resp.text(errors="ignore")
-                            raw_title = _estrai_titolo(text)
-                            if raw_title:
-                                title_norm = self._normalize_title(raw_title)
-                except aiohttp.ClientError:
-                    pass
+            break 
+
+        # ultimo step: se richiesto, provo a leggere il titolo
+        if fetch_title:
+            try:
+                async with session.get(current) as resp:
+                    if resp.status == 200 and resp.content_type and resp.content_type.startswith("text/html"):
+                        text = await resp.text(errors="ignore")
+                        raw_title = _estrai_titolo(text)
+                        if raw_title:
+                            title_norm = self._normalize_title(raw_title)
+            except aiohttp.ClientError:
+                pass
 
         return current, title_norm
 
