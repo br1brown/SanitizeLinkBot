@@ -24,14 +24,15 @@ from urllib.parse import (
 import os
 import aiohttp
 import html
+import hashlib
 
 from collections.abc import Iterable
 
-from telegram import Update, MessageEntity, ReactionTypeEmoji
+from telegram import InlineQueryResultArticle, InputMessageContent, InputTextMessageContent, Update, MessageEntity, ReactionTypeEmoji
 from telegram.constants import ChatType, ParseMode
 
 from telegram.ext import (
-    CommandHandler, Application, ContextTypes, MessageHandler, filters
+    CommandHandler, Application, ContextTypes, InlineQueryHandler, MessageHandler, filters
 )
 
 import logging
@@ -770,6 +771,29 @@ class TelegramHandlers:
             reply_id,
         )
 
+    async def handle_inline(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        iq = update.inline_query
+        if not iq:
+            return
+
+        q = (iq.query or "").strip()
+        urls = GetterUrl.estrai_urls(q)  # tua regex
+        if not urls:
+            return
+
+        raw = urls[0]  # SOLO il primo link
+        clean_url, title = await self.sanitizer.sanifica_url(raw)  # usa la tua sanificazione singola
+
+        rid = hashlib.md5(clean_url.encode("utf-8")).hexdigest()
+        result = InlineQueryResultArticle(
+            id=rid,
+            title=title or "URL pulito",
+            description=clean_url,
+            input_message_content=InputTextMessageContent(clean_url),
+        )
+
+        await iq.answer([result], cache_time=0, is_personal=True)
+
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
         first_name = user.first_name if user and user.first_name else "Utente"
@@ -895,6 +919,9 @@ async def main() -> None:
     # privato: testo/caption non comando
     private_filter = (filters.ChatType.PRIVATE & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND)
     app.add_handler(MessageHandler(private_filter, handlers.handle_privato), group=1)
+
+    app.add_handler(InlineQueryHandler(handlers.handle_inline), group=0)
+
 
     logger.info("Configurazione caricata. Bot in esecuzione")
 
