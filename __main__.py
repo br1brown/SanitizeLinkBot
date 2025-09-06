@@ -787,7 +787,7 @@ class TelegramHandlers:
         rid = hashlib.md5(clean_url.encode("utf-8")).hexdigest()
         result = InlineQueryResultArticle(
             id=rid,
-            title=title or "URL pulito",
+            title=title or "URL",
             description=clean_url,
             input_message_content=InputTextMessageContent(clean_url),
         )
