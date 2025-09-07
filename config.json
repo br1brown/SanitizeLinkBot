@@ -12,11 +12,7 @@
     "ttl_dns_cache": 60,
     "max_redirects": 5,
     "timeout_sec": 12,
-    "validate_cleaned": true
-  },
-
-  "Formatting": {
-    "trailing_punct": ".,;:!?)”»’'\""
+    "valida_link_post_pulizia": true
   },
 
   "Logging": {

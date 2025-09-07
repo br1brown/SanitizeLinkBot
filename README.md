@@ -46,7 +46,7 @@ File `config.json` (chiavi principali):
     "ttl_dns_cache": 60,
     "max_redirects": 5,
     "timeout_sec": 15,
-    "validate_cleaned": true
+    "valida_link_post_pulizia": true
   },
   "Formatting": { "trailing_punct": ".,;:!?)”»’'\"" },
   "Logging": { "level": "INFO" }
@@ -59,7 +59,7 @@ File `config.json` (chiavi principali):
 * `HTTP.ttl_dns_cache`: TTL cache DNS del connettore `aiohttp` (opzionale ma supportato dal codice).
 * `HTTP.max_redirects`: numero massimo di redirect seguiti.
 * `HTTP.timeout_sec`: timeout totale per richiesta.
-* `HTTP.validate_cleaned`: se true, verifica che l’URL pulito sia raggiungibile; in caso contrario invia l’URL finale originale.
+* `HTTP.valida_link_post_pulizia`: se true, verifica che l’URL pulito sia raggiungibile; in caso contrario invia l’URL finale originale.
 * `Formatting.trailing_punct`: insieme di caratteri finali da rimuovere dai link.
 * `Logging.level`: livello di log (DEBUG, INFO, WARNING, ERROR, CRITICAL).
 
