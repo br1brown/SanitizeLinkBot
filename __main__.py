@@ -809,9 +809,17 @@ class TelegramHandlers:
             ),
         )
 
-        await inline_query.answer(
-            [result], cache_time=0, is_personal=True
-        )  # rispondo alla inline query mostrando l anteprima del link pulito
+        await inline_query.answer([result], cache_time=0, is_personal=True)
+        
+        user = inline_query.from_user if hasattr(inline_query, "from_user") else None
+        logger.info(
+            "INLINE: da '%s' (@%s, id=%s) — clean='%s', result_id=%s",
+            getattr(user, "full_name", "n/a"),
+            getattr(user, "username", "n/a"),
+            getattr(user, "id", "n/a"),
+            len(lista_url),
+            rid,
+        )
 
     async def cmd_start(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
