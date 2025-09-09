@@ -21,6 +21,12 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="app_config.py" />
+    <Compile Include="getter_url.py" />
+    <Compile Include="sanitizer.py" />
+    <Compile Include="telegram_handlers.py" />
+    <Compile Include="telegram_io.py" />
+    <Compile Include="utils.py" />
     <Compile Include="__main__.py" />
   </ItemGroup>
   <ItemGroup>
