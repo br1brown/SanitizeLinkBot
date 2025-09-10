@@ -1,4 +1,5 @@
 from __future__ import annotations
+from uu import Error
 
 # Modulo: sanitizer.py
 # Scopo: pulire URL (rimozione parametri di tracciamento), seguire redirect e
@@ -17,10 +18,328 @@ from urllib.parse import (  # utilità per scomporre/ricomporre URL
     parse_qsl,
     urlencode,
     urljoin,
+    urlparse,
+    urlunparse,
 )
+import hashlib
+from dataclasses import dataclass
+from typing import Optional
+
 import aiohttp  # client HTTP asincrono
 
 from app_config import AppConfig  # configurazione applicativa
+
+
+@dataclass
+class PageSignals:
+    final_url: str
+    url_path: str
+    status: int
+    content_type: str
+    etag: Optional[str]
+    lastmod: Optional[str]
+    canonical: Optional[str]
+    og_url: Optional[str]
+    title: Optional[str]
+    chunk_hash: Optional[str]
+
+    @staticmethod
+    def _ok(status) -> bool:
+        return 200 <= status < 300 or 300 <= status < 400 or status in (401, 403)
+
+    def is_url_ok(self) -> bool:
+        return self._ok(self.status) and self.final_url.startswith(
+            ("http://", "https://")
+        )
+
+    @staticmethod
+    def _norm_etag(et: str | None) -> str | None:
+        if not et:
+            return None
+        et = et.strip()
+        if et.startswith("W/"):
+            et = et[2:].strip()
+        if len(et) >= 2 and ((et[0] == et[-1] == '"') or (et[0] == et[-1] == "'")):
+            et = et[1:-1]
+        return et or None
+
+    @staticmethod
+    def _same_html_type(a: str | None, b: str | None) -> bool:
+        if not a or not b:
+            return True  # sii permissivo se mancano
+        a = a.lower().split(";")[0].strip()
+        b = b.lower().split(";")[0].strip()
+        htmlish = ("text/html", "application/xhtml+xml")
+        return (a in htmlish and b in htmlish) or (a == b)
+
+    @staticmethod
+    def _normalize_url_path(url: str | None) -> str | None:
+        if not url:
+            return None
+        parsato = urlparse(url)
+        scheme = (parsato.scheme or "http").lower()
+        host = (parsato.hostname or "").lower()
+        port = parsato.port or ""
+        # rimuovi porta di default
+        if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
+            port = ""
+        netloc = host if not port else f"{host}:{port}"
+        path = parsato.path or "/"
+        if path != "/" and path.endswith("/"):
+            path = path[:-1]
+        return urlunparse((scheme, netloc, path, "", "", ""))
+
+    def equivalent_to(
+        self, other: Optional["PageSignals"], check_url: bool = False
+    ) -> bool:
+        """Ritorna True se i due insiemi di segnali indicano la *stessa pagina*."""
+        if not self or not other:
+            return False
+
+        # ETag è un indicatore molto forte.
+        a_et, b_et = PageSignals._norm_etag(self.etag), PageSignals._norm_etag(
+            other.etag
+        )
+        if a_et and b_et and a_et == b_et:
+            return True
+
+        # Last-Modified ha senso solo se si riferisce alla stessa “risorsa logica”.
+        if (
+            self.lastmod
+            and other.lastmod
+            and self.lastmod == other.lastmod
+            and PageSignals._normalize_url_path(self.url_path)
+            == PageSignals._normalize_url_path(other.url_path)
+        ):
+            return True
+
+        # canonical o og:url indicano la versione “canonica” della pagina.
+        canonical_a = PageSignals._normalize_url_path(self.canonical or self.og_url)
+        canonical_b = PageSignals._normalize_url_path(other.canonical or other.og_url)
+        if canonical_a and canonical_b and canonical_a == canonical_b:
+            return True
+
+        # Confronto dei primi byte (hash) + tipo contenuto coerente.
+        if (
+            self.chunk_hash
+            and other.chunk_hash
+            and self.chunk_hash == other.chunk_hash
+            and self._same_html_type(self.content_type, other.content_type)
+        ):
+            return True
+
+        # Fallback HTML: stesso titolo + stessa risorsa logica.
+        if (
+            self.title
+            and other.title
+            and self.title == other.title
+            and PageSignals._normalize_url_path(self.url_path)
+            == PageSignals._normalize_url_path(other.url_path)
+        ):
+            return True
+
+        if check_url:
+            return PageSignals._normalize_url_path(
+                self.url_path
+            ) == PageSignals._normalize_url_path(other.url_path)
+
+        # Se nessun criterio ha dato esito positivo, consideriamo “diverse”.
+        return False
+
+    @staticmethod
+    def _normalize_title(raw: str | None) -> str | None:
+        if not raw:
+            return None
+        t = html.unescape(raw.strip())
+        t = re.sub(r"[\u200B-\u200D\uFEFF]", "", t)  # zero-width
+        t = t.replace("\u00a0", " ")  # NBSP: spazio
+        t = re.sub(r"\s+", " ", t).strip()
+        return t or None
+
+    @staticmethod
+    def _pick_charset(raw_ct_header: str | None) -> str:
+        # estrae charset dal Content-Type se presente
+        if raw_ct_header:
+            parts = raw_ct_header.lower().split(";")
+            for p in parts[1:]:
+                p = p.strip()
+                if p.startswith("charset="):
+                    return p.split("=", 1)[1].strip().strip('"').strip("'")
+        return "utf-8"
+
+    @staticmethod
+    async def _fetch_signals(url: str, sanita: Sanitizer) -> PageSignals | None:
+        MAX_BYTES = 512 * 1024  # 512 KB
+
+        canonical_url: Optional[str] = None
+        og_url: Optional[str] = None
+        titolo_pagina: Optional[str] = None
+
+        BASE_HEADERS = (
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/126.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+            },
+        )
+
+        # Strategia in base al flag
+        if sanita.conf.show_title:
+            headers = {}
+            max_bytes = 1_048_576  # 1 MB tetto sicurezza
+            chunk_size = 16_384
+        else:
+            headers = {"Range": "bytes=0-131071"}  # 128 KB
+            max_bytes = 131_072
+            chunk_size = 8_192
+
+        _RE_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+        _RE_CANONICAL_TXT = re.compile(
+            r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']',
+            re.IGNORECASE,
+        )
+        _RE_OGURL_TXT = re.compile(
+            r'<meta[^>]+property=["\']og:url["\'][^>]+content=["\']([^"\']+)["\']',
+            re.IGNORECASE,
+        )
+        _RE_OGTITLE_TXT = re.compile(
+            r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+            re.IGNORECASE,
+        )
+        _RE_TWTITLE_TXT = re.compile(
+            r'<meta[^>]+name=["\']twitter:title["\'][^>]+content=["\']([^"\']+)["\']',
+            re.IGNORECASE,
+        )
+
+        _RE_HEAD_CLOSE_B = re.compile(rb"</head\b[^>]*>", re.IGNORECASE)
+        _RE_TITLE_CLOSE_B = re.compile(rb"</title\s*>", re.IGNORECASE)
+        _META_CHARSET_B = re.compile(
+            rb'<meta[^>]+charset=["\']?\s*([a-zA-Z0-9_\-]+)\s*["\'>]', re.IGNORECASE
+        )
+
+        try:
+            session = await sanita._get_session()
+            async with session.get(
+                url,
+                allow_redirects=False,
+                headers=headers,
+                timeout=sanita.conf.timeout_sec,
+            ) as resp:
+                # PRIMA leggi gli header  ti servono anche per l'early return
+                raw_cl = resp.headers.get("Content-Length")
+                raw_ct = resp.headers.get("Content-Type")
+                content_type = (raw_ct or "").split(";")[0].strip().lower()
+
+                if raw_cl:
+                    try:
+                        if int(raw_cl) > MAX_BYTES or not (200 <= resp.status < 300):
+                            # early return “leggero”, ma serve valorizzare tutti i campi richiesti
+                            return PageSignals(
+                                final_url=str(resp.url),
+                                url_path=PageSignals._normalize_url_path(str(resp.url)),
+                                status=resp.status,
+                                content_type=content_type,
+                                etag=resp.headers.get("ETag"),
+                                lastmod=resp.headers.get("Last-Modified"),
+                                canonical=None,
+                                og_url=None,
+                                title=None,
+                                chunk_hash=None,
+                            )
+                    except ValueError:
+                        pass
+
+                primo_chunk = b""
+
+                async for blocco in resp.content.iter_chunked(chunk_size):
+                    if not blocco or len(blocco) > MAX_BYTES:
+                        break
+                    primo_chunk += blocco
+
+                    # Sniff HTML se CT mancante
+                    if not content_type:
+                        low2k = primo_chunk[:2048].lower()
+                        if b"<!doctype html" in low2k or b"<html" in low2k:
+                            content_type = "text/html"
+
+                    # Condizione di stop
+                    if sanita.conf.show_title:
+                        # Se cerco il titolo: NON fermarti su </head>. Solo </title> o tetto.
+                        if (
+                            _RE_TITLE_CLOSE_B.search(primo_chunk)
+                            or len(primo_chunk) >= max_bytes
+                        ):
+                            break
+                    else:
+                        # Peek leggero: stop su </head> o tetto.
+                        if (
+                            _RE_HEAD_CLOSE_B.search(primo_chunk)
+                            or len(primo_chunk) >= max_bytes
+                        ):
+                            break
+
+                # Charset dagli header (fallback meta, poi utf-8/latin-1)
+                charset = PageSignals._pick_charset(raw_ct)
+                if "html" in content_type and primo_chunk:
+                    META_CHAR = _META_CHARSET_B.search(primo_chunk[:8192])
+                    if META_CHAR:
+                        try:
+                            cand = META_CHAR.group(1).decode("ascii", "ignore").lower()
+                            if cand:
+                                charset = cand
+                        except Exception:
+                            pass
+
+                    try:
+                        head_text = primo_chunk.decode(charset, errors="strict")
+                    except Exception:
+                        try:
+                            head_text = primo_chunk.decode("utf-8", errors="ignore")
+                        except Exception:
+                            head_text = primo_chunk.decode("latin-1", errors="ignore")
+
+                    # canonical / og:url
+                    m = _RE_CANONICAL_TXT.search(head_text)
+                    if m:
+                        canonical_url = m.group(1).strip()
+                    m = _RE_OGURL_TXT.search(head_text)
+                    if m:
+                        og_url = m.group(1).strip()
+
+                    # Titolo: <title>: og:title: twitter:title
+                    m = _RE_TITLE.search(head_text)
+                    if m:
+                        titolo_pagina = PageSignals._normalize_title(m.group(1))
+                    if not titolo_pagina:
+                        m = _RE_OGTITLE_TXT.search(head_text)
+                        if m:
+                            titolo_pagina = PageSignals._normalize_title(m.group(1))
+                    if not titolo_pagina:
+                        m = _RE_TWTITLE_TXT.search(head_text)
+                        if m:
+                            titolo_pagina = PageSignals._normalize_title(m.group(1))
+                # maniman
+                if resp.status >= 400:
+                    titolo_pagina = None
+
+                return PageSignals(
+                    final_url=str(resp.url),
+                    url_path=PageSignals._normalize_url_path(str(resp.url)),
+                    status=resp.status,
+                    content_type=content_type,
+                    etag=resp.headers.get("ETag"),
+                    lastmod=resp.headers.get("Last-Modified"),
+                    canonical=canonical_url,
+                    og_url=og_url,
+                    title=titolo_pagina,
+                    chunk_hash=(
+                        hashlib.sha256(primo_chunk).hexdigest() if primo_chunk else None
+                    ),
+                )
+        except Exception as e:
+            return None
 
 
 class Sanitizer:
@@ -42,7 +361,7 @@ class Sanitizer:
         conf: AppConfig,
     ) -> None:
         # Log di inizializzazione per trasparenza su regole caricate.
-        logger.debug("inizializzazione sanitizer con set di regole e whitelist domini")
+        logger.debug("Sanitizer initialized with rule sets and domain whitelist")
         # Normalizzo tutte le chiavi per confronti case-insensitive.
         self.EXACT_KEYS = set(map(str.lower, exact_keys or set()))
         self.PREFIX_KEYS = tuple(k.lower() for k in (prefix_keys or ()))
@@ -55,16 +374,40 @@ class Sanitizer:
         }
         # Conservo un riferimento alla configurazione runtime.
         self.conf = conf
+
         # Sessione HTTP aiohttp condivisa (creata lazy al primo uso).
         self._session: aiohttp.ClientSession | None = None
+
+        self.META_REFRESH_RE = re.compile(
+            r'<meta\s+http-equiv=["\']refresh["\']\s+content=["\']\s*\d+\s*;\s*url\s*=\s*([^"\']+)["\']',
+            re.IGNORECASE,
+        )
+
+        self.PATTERNS_JS_REDIRECT = [
+            r'window\.location\s*=\s*["\']([^"\']+)["\']',
+            r'window\.location\.href\s*=\s*["\']([^"\']+)["\']',
+            r'location\.href\s*=\s*["\']([^"\']+)["\']',
+            r'location\.replace\(\s*["\']([^"\']+)["\']\s*\)',
+            r'location\.assign\(\s*["\']([^"\']+)["\']\s*\)',
+        ]
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Crea (se serve) una sessione HTTP condivisa con timeout e limiti sensati."""
         # Se non esiste una sessione oppure è stata chiusa, la creo.
         if self._session is None or self._session.closed:
+            # _get_session (log più ricco)
             logger.debug(
-                "creazione di aiohttp clientsession con timeout e limit per host"
+                "Creating aiohttp ClientSession (timeout_total=%ss, connect_timeout=%ss, limit_per_host=%s, ttl_dns_cache=%ss)",
+                self.conf.timeout_sec,
+                self.conf.timeout_sec / 3,
+                (
+                    self.conf.connections_per_host
+                    if self.conf.connections_per_host > 0
+                    else None
+                ),
+                self.conf.ttl_dns_cache,
             )
+
             # Connettore con limiti per host e TTL della cache DNS.
             connector = aiohttp.TCPConnector(
                 limit_per_host=(
@@ -90,52 +433,11 @@ class Sanitizer:
         """Chiude la sessione HTTP se ancora aperta per liberare risorse."""
         # Se la sessione c'è ed è ancora attiva, la chiudo e azzero il riferimento.
         if self._session and not self._session.closed:
-            logger.debug("chiusura sessione http")
+            logger.debug("Closing HTTP session and releasing resources")
             await self._session.close()
             self._session = None
 
-    async def _check_url_ok(self, url: str) -> bool:
-        """Verifica che un URL risponda con codice 'accettabile' (esistenza).
-
-        - Considera validi: 2xx, 3xx
-        - Tollerati: 401/403 (alcuni siti bloccheranno bot ma l'URL esiste)
-        """
-        try:
-            # Ottengo la sessione HTTP.
-            session = await self._get_session()
-            # Richiesta GET molto leggera grazie all'header Range (solo il primo byte).
-            async with session.get(
-                url,
-                headers={"Range": "bytes=0-0"},
-                allow_redirects=True,
-                max_redirects=self.conf.max_redirects,
-            ) as response:
-                # Valuto lo status 2xx/3xx come valido.
-                if 200 <= response.status < 300 or 300 <= response.status < 400:
-                    return True
-                # Accetto 401/403 come "esiste ma protetto", purché schema http/https.
-                if response.status in (401, 403) and url.startswith(
-                    ("http://", "https://")
-                ):
-                    return True
-                # Altri codici → non valido.
-                return False
-        except asyncio.TimeoutError:
-            # Timeout: segnalo con warning e considero non valido.
-            logger.warning("Timeout verificando %s", url)
-            return False
-        except aiohttp.ClientError as error:
-            # Errori lato client HTTP: loggo e considero non valido.
-            logger.warning("Errore HTTP verificando %s: %s", url, error)
-            return False
-        except Exception as error:
-            # Qualunque altro errore inatteso: loggo dettagli e considero non valido.
-            logger.error(
-                "Errore inatteso verificando %s: %s", url, error, exc_info=True
-            )
-            return False
-
-    def is_parametro_da_rimuovere(self, key: str) -> bool:
+    def is_key_to_remove(self, key: str) -> bool:
         """Decide se un parametro di query va rimosso (match esatto, prefisso o suffisso)."""
         # Porto la chiave a minuscolo con fallback su stringa vuota.
         lowered_key = (key or "").lower()
@@ -146,81 +448,34 @@ class Sanitizer:
             or any(lowered_key.endswith(suffix) for suffix in self.ENDS_WITH)
         )
         # Loggo la decisione (utile per audit).
-        logger.debug("parametro %s marcato per rimozione %s", key, should_remove)
+        logger.debug("Parameter '%s' marked for removal: %s", key, should_remove)
         # Ritorno la decisione finale.
         return should_remove
 
-    def _estrai_titolo(self, html_text: str) -> str | None:
-        """Estrae il contenuto del tag <title> e normalizza gli spazi/entità HTML."""
-        # Cerco il blocco <title>...</title> anche su più righe.
-        match_title = re.search(
-            r"<title[^>]*>(.*?)</title>", html_text, re.IGNORECASE | re.DOTALL
-        )
-        # Se non c'è titolo, ritorno None.
-        if not match_title:
-            return None
-        # Prendo il contenuto grezzo del titolo.
-        raw_title = match_title.group(1).strip()
-        # Se è vuoto, ritorno None.
-        if not raw_title:
-            return None
-        # Converto le entità HTML (es. &amp; → &).
-        unescaped_title = html.unescape(raw_title)
-        # Rimuovo caratteri invisibili zero-width.
-        unescaped_title = re.sub(r"[\u200B-\u200D\uFEFF]", "", unescaped_title)
-        # Sostituisco NBSP con spazio normale.
-        unescaped_title = unescaped_title.replace("\u00a0", " ")
-        # Collasso spazi multipli e strip finale.
-        normalized_title = re.sub(r"\s+", " ", unescaped_title).strip()
-        # Ritorno il titolo normalizzato o None se vuoto.
-        return normalized_title or None
-
-    async def segui_redirect(self, url_iniziale: str):
-        """Segue redirect HTTP, meta refresh e redirect JS fino al limite configurato.
-
-        Ritorna una tupla (url_finale, eventuale_titolo).
-        """
+    async def do_redirect(self, url_iniziale: str) -> PageSignals:
 
         def meta_refresh_target(html_text: str, base_url: str) -> str | None:
-            """Individua target da meta http-equiv=refresh e lo risolve rispetto alla base."""
-            match_meta = re.search(
-                r'<meta[^>]+http-equiv=["\']refresh["\'][^>]+content=["\']\s*\d+\s*;\s*url\s*=\s*([^"\']+)["\']',
-                html_text,
-                re.IGNORECASE,
-            )
-            return (
-                urljoin(base_url, match_meta.group(1).strip()) if match_meta else None
-            )
+            m = self.META_REFRESH_RE.search(html_text)
+            if m and m.group(1):
+                return urljoin(base_url, m.group(1).strip())
+            return None
 
         def js_redirect_target(html_text: str, base_url: str) -> str | None:
-            """Cerca pattern comuni di redirect JavaScript e li risolve rispetto alla base."""
-            patterns = [
-                r'window\.location\s*=\s*["\']([^"\']+)["\']',
-                r'window\.location\.href\s*=\s*["\']([^"\']+)["\']',
-                r'location\.href\s*=\s*["\']([^"\']+)["\']',
-                r'location\.replace\(\s*["\']([^"\']+)["\']\s*\)',
-                r'location\.assign\(\s*["\']([^"\']+)["\']\s*\)',
-            ]
-            for pattern in patterns:
+            for pattern in self.PATTERNS_JS_REDIRECT:
                 match_js = re.search(pattern, html_text, re.IGNORECASE)
                 if match_js and match_js.group(1):
                     return urljoin(base_url, match_js.group(1).strip())
             return None
 
-        # Imposto l'URL corrente al valore iniziale.
         current_url = url_iniziale
-        # Contatore dei redirect seguiti finora.
         redirect_count = 0
-        # Titolo normalizzato (se lo estrarrò).
-        normalized_title = None
+        signals: Optional[PageSignals] = None
 
-        # Ottengo la sessione HTTP da riutilizzare.
         session = await self._get_session()
 
-        # Entro in un ciclo finché non supero il numero massimo di redirect.
         while redirect_count < self.conf.max_redirects:
             try:
-                # 1) Tentativo veloce: HEAD per leggere Location senza scaricare il corpo.
+                # HEAD veloce per Location
                 async with session.head(current_url, allow_redirects=False) as response:
                     if response.status in (301, 302, 303, 307, 308):
                         location_header = response.headers.get("Location")
@@ -229,22 +484,28 @@ class Sanitizer:
                             redirect_count += 1
                             continue
             except aiohttp.ClientError:
-                # Se HEAD fallisce, proseguo con gli altri tentativi.
-                break
+                # ⬇️ non uscire dal loop: passa alla GET
+                logger.debug("HEAD request failed, falling back to GET", exc_info=True)
+                pass
 
             try:
-                # 2) GET parziale (Range) per cercare meta refresh o redirect via script.
+                # GET parziale per meta-refresh / JS redirect
                 async with session.get(
                     current_url,
                     headers={"Range": "bytes=0-16383"},
                     allow_redirects=False,
                 ) as response:
                     if response.status in (301, 302, 303, 307, 308):
-                        location_header = response.headers.get("Location")
-                        if location_header:
-                            current_url = urljoin(current_url, location_header)
+                        location = response.headers.get("Location")
+                        if location:
+                            current_url = urljoin(current_url, location)
                             redirect_count += 1
                             continue
+
+                    # fallback se il server non supporta Range (416) o ignora Range
+                    if response.status == 416:
+                        raise aiohttp.ClientError("Range non supportato")
+
                     if (
                         response.status == 200
                         and response.content_type
@@ -259,19 +520,13 @@ class Sanitizer:
                             redirect_count += 1
                             continue
             except aiohttp.ClientError:
-                # Se GET parziale fallisce, proverò l'ultimo tentativo completo.
-                break
-
-            # Provo a leggere l'host (utile in alcuni casi per log o regole specifiche).
-            try:
-                host = urlsplit(current_url).netloc.lower()
-                _ = host  # uso dummy per evitare warning di variabile inutilizzata nei linter
-            except Exception:
-                # In caso di URL non parseable, ignoro.
+                logger.debug(
+                    "Partial GET failed, retrying with full GET", exc_info=True
+                )
                 pass
 
             try:
-                # 3) Ultimo tentativo: GET completa (alcuni shortener la richiedono).
+                # GET completa come ultimo tentativo
                 async with session.get(current_url, allow_redirects=False) as response:
                     if response.status in (301, 302, 303, 307, 308):
                         location_header = response.headers.get("Location")
@@ -293,76 +548,65 @@ class Sanitizer:
                             redirect_count += 1
                             continue
             except aiohttp.ClientError:
-                # Anche qui se fallisce, esco dal ciclo.
+                logger.debug(
+                    "Full GET failed, stopping redirect attempts", exc_info=True
+                )
                 break
 
-            # Se non ho più redirect da seguire, esco dal ciclo.
+            # nessun altro redirect trovato
             break
 
-        # Se la configurazione richiede di mostrare il titolo, lo scarico ora.
-        if self.conf.show_title:
-            try:
-                async with session.get(current_url) as response:
-                    if (
-                        response.status == 200
-                        and response.content_type
-                        and response.content_type.startswith("text/html")
-                    ):
-                        html_text = await response.text(errors="ignore")
-                        normalized_title = self._estrai_titolo(html_text)
+        try:
+            return await PageSignals._fetch_signals(current_url, self)
+        except Exception as error:
+            logger.exception("Error while extracting page signals")
+            return None
 
-            except Exception as error:
-                logger.error(
-                    "errore durante la sanificazione ritorno url grezzo %s", error
-                )
-
-        # Rimuovo eventuale punteggiatura finale eccessiva (lasciando parentesi bilanciate).
-        while current_url and current_url[-1] in ".,;:!?)”»’'\"" + "\u00a0":
-            if current_url.endswith(")") and current_url.count("(") < current_url.count(
-                ")"
-            ):
-                break
-            current_url = current_url[:-1]
-
-        # Ritorno la coppia (URL finale, eventuale titolo normalizzato).
-        return current_url, normalized_title
-
-    async def sanifica_url(self, raw_url: str) -> tuple[str, str | None]:
+    async def sanitize_url(self, raw_url: str) -> tuple[str, str | None]:
         """Pulisce un singolo URL: schema, redirect, query, frammenti, validazione."""
         # Se l'input è vuoto, non elaboro e ritorno input come output con titolo None.
         if not raw_url:
-            logger.debug("sanifica url url vuoto")
+            logger.debug("Received empty URL: returning as-is")
             return raw_url, None
 
+        final_title: Optional[str] = None
+
         # Normalizzo spazi ai bordi.
-        current_input_url = raw_url.strip()
-        # Valori di fallback in caso di eccezioni.
-        final_url = current_input_url
-        final_title: str | None = ""
+        _input_url = (raw_url or "").strip()
 
         # Se lo schema è mailto: o tel:, restituisco subito senza modifiche.
-        if re.match(r"^(mailto:|tel:)", current_input_url, re.IGNORECASE):
-            logger.debug("protocollo non web restituzione invariata")
-            return current_input_url, None
+        if re.match(r"^(mailto:|tel:)", _input_url, re.IGNORECASE):
+            logger.debug(
+                "Non-web protocol detected (%s): returning unchanged", _input_url
+            )
+            return _input_url, None
 
         # Se manca lo schema (es. dominio.com), premetto https://.
-        if not re.match(r"^[a-zA-Z][a-zA-Z0-9+\-.]*://", current_input_url):
-            logger.debug("schema mancante aggiungo https")
-            current_input_url = "https://" + current_input_url
+        if not re.match(r"^[a-zA-Z][a-zA-Z0-9+\-.]*://", _input_url):
+            logger.debug("Missing scheme in URL: prepending 'https://'")
+            _input_url = "https://" + _input_url
+
+        try:
+            _sig_orig: PageSignals = await PageSignals._fetch_signals(_input_url, self)
+            if _sig_orig:
+                final_title = _sig_orig.title
+        except Exception as e:
+            _sig_orig = None
 
         try:
             # Seguo i redirect e ottengo l'URL finale (e un eventuale titolo preliminare).
-            post_redirect_url, extracted_title = await self.segui_redirect(
-                current_input_url
-            )
-            # Se show_title è attivo memorizzo il titolo, altrimenti None.
-            final_title = "" if not self.conf.show_title else (extracted_title or None)  # type: ignore[assignment]
+            _sig_postredir = await self.do_redirect(_input_url)
         except Exception as error:
             # In caso di errori durante i redirect, tengo l'URL "grezzo" come fallback.
             logger.info(
-                f"head fallita su {current_input_url} eseguo fallback get {error}"
+                "HEAD failed on %s — falling back to GET (%s)", _input_url, error
             )
-            post_redirect_url, extracted_title = current_input_url, None
+            _sig_postredir = None
+
+        final_title = (
+            _sig_postredir.title if _sig_postredir and _sig_postredir.title else None
+        )
+        post_redirect_url = _sig_postredir.final_url if _sig_postredir else _input_url
 
         try:
             # Scompongo l'URL per lavorare su dominio, path, query, frammento.
@@ -371,14 +615,14 @@ class Sanitizer:
                 r"^www\.", "", split_parts.netloc, flags=re.IGNORECASE
             ).lower()
             logger.debug(
-                "parsing url finale domain %s path %s query %s fragment %s",
+                "Parsed final URL: domain=%s path=%s query=%s fragment=%s",
                 domain_no_www,
                 split_parts.path,
                 split_parts.query,
                 split_parts.fragment,
             )
 
-            # Se il dominio è in whitelist, NON tocco i parametri → ritorno subito.
+            # Se il dominio è in whitelist, NON tocco i parametri -> ritorno subito.
             if domain_no_www in self.DOMAIN_WHITELIST:
                 return post_redirect_url, final_title
 
@@ -388,7 +632,7 @@ class Sanitizer:
             filtered_query_params = [
                 (param_key, param_value)
                 for (param_key, param_value) in original_query_params
-                if not self.is_parametro_da_rimuovere(param_key)
+                if not self.is_key_to_remove(param_key)
             ]
             # Ricostruisco la nuova query string (doseq=True gestisce liste di valori).
             new_query_string = urlencode(filtered_query_params, doseq=True)
@@ -413,29 +657,51 @@ class Sanitizer:
                 )
             )
 
-            # Se configurato, valido l'URL "pulito"; se non risponde, mantengo l'URL post-redirect.
-            if self.conf.valida_link_post_pulizia and final_url != post_redirect_url:
-                is_ok = await self._check_url_ok(final_url)
-                if not is_ok:
-                    logger.info(
-                        "validazione fallita per url pulito restituisco url finale originale"
-                    )
+            if self.conf.valida_link_post_pulizia:
+
+                if _sig_orig and not _sig_orig.is_url_ok():
+                    raise Exception()
+
+                if (new_query_string == split_parts.query) and (
+                    new_fragment == split_parts.fragment
+                ):
                     return post_redirect_url, final_title
 
-            # Se arrivo qui, ho un URL pulito valido → lo ritorno con l'eventuale titolo.
-            logger.debug("url pulito prodotto")
+                try:
+                    _sig_clean: PageSignals = await PageSignals._fetch_signals(
+                        final_url, self
+                    )
+
+                    if _sig_clean and _sig_clean.title:
+                        final_title = _sig_clean.title
+
+                except Exception:
+                    _sig_clean = None
+
+                if not (
+                    _sig_clean and _sig_orig and _sig_clean.equivalent_to(_sig_orig)
+                ):
+                    if (
+                        _sig_clean
+                        and _sig_postredir
+                        and _sig_clean.equivalent_to(_sig_postredir, True)
+                    ):
+                        pass
+                    else:
+                        raise Exception("Errore in validazione contenuti")
+
             return final_url, final_title
+
         except Exception as error:
-            # Qualunque errore nella sanificazione di dettaglio → ritorno l'URL post-redirect.
-            logger.error(
-                "errore durante la sanificazione dettagliata ritorno url grezzo %s",
-                error,
+            # Qualunque errore nella sanificazione di dettaglio -> ritorno l'URL post-redirect.
+            logger.exception(
+                "Error during detailed sanitization: returning raw post-redirect URL"
             )
 
-        # Fallback finale.
+        # Fallback finale DI TUTTO.
         return post_redirect_url, final_title
 
-    async def sanifica_in_batch(self, links: list[str]) -> list[tuple[str, str | None]]:
+    async def sanitize_batch(self, links: list[str]) -> list[tuple[str, str | None]]:
         """Pulisce una lista di URL con deduplica e limite di concorrenza."""
         # Normalizzo ciascun input rimuovendo spazi di contorno.
         normalized_inputs = [(url or "").strip() for url in links]
@@ -459,7 +725,7 @@ class Sanitizer:
             """Elabora un singolo URL all'interno del semaforo."""
             async with concurrency_semaphore:
                 try:
-                    return await self.sanifica_url(input_url)
+                    return await self.sanitize_url(input_url)
                 except Exception:
                     # In caso di errore, ritorno l'URL originale senza titolo.
                     return (input_url, None)

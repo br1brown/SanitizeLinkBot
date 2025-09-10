@@ -1,62 +1,45 @@
 from __future__ import annotations
 
-# Modulo: telegram_io.py
-# Scopo: costruire il testo di risposta da inviare su Telegram (HTML semplice).
+# modulo: telegram_io.py
+# scopo: comporre il testo di risposta da inviare su telegram in html semplice
 
-from utils import logger  # logger condiviso
-import re  # regex per neutralizzare menzioni/hashtag/comandi
-import html  # escape HTML sicuro
-
-from app_config import AppConfig  # per leggere le opzioni di output
+from utils import logger
+import re
+import html
+from app_config import AppConfig
 
 
 class TelegramIO:
-    """Costruisce l'output testuale con titolo (opzionale) e URL pulito per Telegram."""
+    """costruisce l output con titolo opzionale e url pulito per telegram"""
 
     @staticmethod
-    def _neutralizza(test: str) -> str:
-        """Inserisce caratteri zero‑width per evitare trigger di menzioni/hashtag/comandi a inizio parola."""
-        # Se la stringa è vuota, la ritorno com'è.
-        if not test:
-            return test
-        # Neutralizzo @qualcosa all'inizio di parola.
-        test = re.sub(r"(?<!\S)@(\w+)", "@\u2060\\g<1>", test)
-        # Neutralizzo #qualcosa all'inizio di parola.
-        test = re.sub(r"(?<!\S)#(\w+)", "#\u2060\\g<1>", test)
-        # Neutralizzo /comando all'inizio di parola.
-        test = re.sub(r"(?<!\S)/(\w+)", "/\u2060\\g<1>", test)
-        # Ritorno il testo neutralizzato.
-        return test
+    def _neutralize_triggers(text: str) -> str:
+        """inserisce caratteri zero width per evitare trigger di menzioni hashtag e comandi"""
+        if not text:
+            return text
+        text = re.sub(r"(?<!\S)@(\w+)", "@\u2060\\g<1>", text)
+        text = re.sub(r"(?<!\S)#(\w+)", "#\u2060\\g<1>", text)
+        text = re.sub(r"(?<!\S)/(\w+)", "/\u2060\\g<1>", text)
+        return text
 
     @staticmethod
-    def get_output(
-        lista_link_puliti: list[tuple[str, str | None]], conf: AppConfig
+    def build_output(
+        cleaned_links: list[tuple[str, str | None]], conf: AppConfig
     ) -> str:
-        """Compone il testo finale con blocchi separati: titolo opzionale (blockquote) + URL."""
-        # Se la lista è vuota, segnalo che non ho rilevato collegamenti.
-        if not lista_link_puliti:
-            logger.debug("get output nessun link pulito")
+        """compone il testo con blocchi separati, titolo in blockquote e url"""
+        if not cleaned_links:
+            logger.debug("No cleaned links to output")
             return "nessun collegamento rilevato"
 
-        # Raccolgo i blocchi formattati (uno per URL).
         blocks: list[str] = []
-        for url_pulito, eventuale_titolo in lista_link_puliti:
-            # Pezzi che compongono un singolo blocco.
+        for cleaned_url, maybe_title in list(dict.fromkeys(cleaned_links)):
             parts: list[str] = []
-
-            # Se nelle opzioni di output è abilitato show_title e il titolo esiste, preparo un blockquote.
-            if conf.show_title and eventuale_titolo:
-                titolo_safe = html.escape(TelegramIO._neutralizza(eventuale_titolo))
-                parts.append(f"<blockquote>{titolo_safe}</blockquote>")
-
-            # Aggiungo sempre l'URL (escapato) su una nuova riga.
-            parts.append(html.escape(url_pulito))
-            # Unisco le parti del blocco con una riga vuota tra titolo e URL.
+            if conf.show_title and maybe_title:
+                safe_title = html.escape(TelegramIO._neutralize_triggers(maybe_title))
+                parts.append(f"<blockquote>{safe_title}</blockquote>")
+            parts.append(html.escape(cleaned_url))
             blocks.append("\n".join(parts))
 
-        # Unisco i blocchi con una riga vuota di separazione.
-        output_testo = "\n\n".join(blocks)
-        # Loggo quante sezioni ho prodotto.
-        logger.debug("get output testo pronto con %d blocchi", len(blocks))
-        # Ritorno il testo finito.
-        return output_testo
+        text = "\n\n".join(blocks)
+        logger.debug("Prepared output text with %d blocks", len(blocks))
+        return text

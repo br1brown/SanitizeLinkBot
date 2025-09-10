@@ -26,6 +26,7 @@
     <Compile Include="sanitizer.py" />
     <Compile Include="telegram_handlers.py" />
     <Compile Include="telegram_io.py" />
+    <Compile Include="tests\test_basic.py" />
     <Compile Include="utils.py" />
     <Compile Include="__main__.py" />
   </ItemGroup>
@@ -35,6 +36,9 @@
     <Content Include="keys.json" />
     <Content Include="start.html" />
     <Content Include="token.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="tests\" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in

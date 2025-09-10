@@ -9,9 +9,9 @@
 
   "HTTP": {
     "connections_per_host": 10,
+    "max_redirects": 30,
+    "timeout_sec": 30,
     "ttl_dns_cache": 60,
-    "max_redirects": 5,
-    "timeout_sec": 12,
     "valida_link_post_pulizia": true
   },
 
