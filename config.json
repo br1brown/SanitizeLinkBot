@@ -1,6 +1,7 @@
 {
   "Output": {
-    "show_title": true
+    "show_title": false,
+    "show_url": false
   },
 
   "Batch": {

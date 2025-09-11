@@ -24,22 +24,38 @@ class TelegramIO:
 
     @staticmethod
     def build_output(
-        cleaned_links: list[tuple[str, str | None]], conf: AppConfig
+        cleaned_links: list[tuple[str, str | None]], conf: "AppConfig"
     ) -> str:
-        """compone il testo con blocchi separati, titolo in blockquote e url"""
         if not cleaned_links:
             logger.debug("No cleaned links to output")
             return "nessun collegamento rilevato"
 
         blocks: list[str] = []
+        # dedup preservando l'ordine
         for cleaned_url, maybe_title in list(dict.fromkeys(cleaned_links)):
             parts: list[str] = []
-            if conf.show_title and maybe_title:
-                safe_title = html.escape(TelegramIO._neutralize_triggers(maybe_title))
-                parts.append(f"<blockquote>{safe_title}</blockquote>")
-            parts.append(html.escape(cleaned_url))
+            title = (maybe_title or "").strip()
+
+            if conf.show_url:
+                if conf.show_title and title:
+                    safe_title = html.escape(TelegramIO._neutralize_triggers(title))
+                    parts.append(f"<blockquote>{safe_title}</blockquote>")
+                parts.append(html.escape(cleaned_url))
+            else:
+                if conf.show_title and title:
+                    safe_title = html.escape(TelegramIO._neutralize_triggers(title))
+                    safe_href = html.escape(cleaned_url, quote=True)
+                    parts.append(f'<a href="{safe_href}">{safe_title}</a>')
+                else:
+                    parts.append(html.escape(cleaned_url))
+
             blocks.append("\n".join(parts))
 
         text = "\n\n".join(blocks)
-        logger.debug("Prepared output text with %d blocks", len(blocks))
+        logger.debug(
+            "Prepared output text with %d blocks (show_url=%s, show_title=%s)",
+            len(blocks),
+            getattr(conf, "show_url", None),
+            getattr(conf, "show_title", None),
+        )
         return text

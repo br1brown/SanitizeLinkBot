@@ -227,7 +227,6 @@ class PageSignals:
             session = await sanita._get_session()
             async with session.get(
                 url,
-                allow_redirects=False,
                 headers=headers,
                 timeout=sanita.conf.timeout_sec,
             ) as resp:

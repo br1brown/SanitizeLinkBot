@@ -11,7 +11,7 @@ class AppConfig:
     """config generale caricata da json con controllo delle chiavi minime"""
 
     _REQUIRED_KEYS = {
-        "Output": {"show_title"},
+        "Output": {"show_title","show_url"},
         "Batch": {"max_concurrency"},
         "HTTP": {
             "connections_per_host",
@@ -29,7 +29,8 @@ class AppConfig:
 
         # opzioni output
         self.show_title: bool = bool(output_conf["show_title"])
-
+        self.show_url: bool = bool(output_conf["show_url"])
+        
         # opzioni batch
         self.max_concurrency: int = int(batch_conf["max_concurrency"])
 
@@ -96,7 +97,7 @@ class AppConfig:
     def __repr__(self) -> str:
         return (
             "AppConfig("
-            f"show_title={self.show_title}, "
+            f"show_title={self.show_title}, show_url={self.show_url},"
             f"max_redirects={self.max_redirects}, timeout_sec={self.timeout_sec}, "
             f"max_concurrency={self.max_concurrency}, connections_per_host={self.connections_per_host}, "
             ")"
