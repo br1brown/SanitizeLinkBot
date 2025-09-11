@@ -178,23 +178,24 @@ class PageSignals:
         og_url: Optional[str] = None
         titolo_pagina: Optional[str] = None
 
-        BASE_HEADERS = (
+        headers = dict(
             {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/126.0.0.0 Safari/537.36",
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/126.0.0.0 Safari/537.36"
+                ),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
-            },
+            }
         )
 
         # Strategia in base al flag
         if sanita.conf.show_title:
-            headers = {}
             max_bytes = 1_048_576  # 1 MB tetto sicurezza
             chunk_size = 16_384
         else:
-            headers = {"Range": "bytes=0-131071"}  # 128 KB
+            headers["Range"] = "bytes=0-131071"  # 128 KB
             max_bytes = 131_072
             chunk_size = 8_192
 
@@ -230,15 +231,29 @@ class PageSignals:
                 headers=headers,
                 timeout=sanita.conf.timeout_sec,
             ) as resp:
-                # PRIMA leggi gli header  ti servono anche per l'early return
                 raw_cl = resp.headers.get("Content-Length")
                 raw_ct = resp.headers.get("Content-Type")
                 content_type = (raw_ct or "").split(";")[0].strip().lower()
 
-                if raw_cl:
+                # Early return per status non 2xx: va fatto sempre, non solo se c'è Content-Length
+                if not (200 <= resp.status < 300):
+                    return PageSignals(
+                        final_url=str(resp.url),
+                        url_path=PageSignals._normalize_url_path(str(resp.url)),
+                        status=resp.status,
+                        content_type=content_type,
+                        etag=resp.headers.get("ETag"),
+                        lastmod=resp.headers.get("Last-Modified"),
+                        canonical=None,
+                        og_url=None,
+                        title=None,
+                        chunk_hash=None,
+                    )
+
+                # Early return per oggetto troppo grande, solo se il server lo dichiara
+                elif raw_cl:
                     try:
-                        if int(raw_cl) > MAX_BYTES or not (200 <= resp.status < 300):
-                            # early return “leggero”, ma serve valorizzare tutti i campi richiesti
+                        if int(raw_cl) > MAX_BYTES:
                             return PageSignals(
                                 final_url=str(resp.url),
                                 url_path=PageSignals._normalize_url_path(str(resp.url)),
@@ -251,14 +266,13 @@ class PageSignals:
                                 title=None,
                                 chunk_hash=None,
                             )
-                    except ValueError:
+                    except (ValueError, TypeError):
                         pass
 
                 primo_chunk = b""
 
                 async for blocco in resp.content.iter_chunked(chunk_size):
-                    if not blocco or len(blocco) > MAX_BYTES:
-                        break
+
                     primo_chunk += blocco
 
                     # Sniff HTML se CT mancante
@@ -306,10 +320,10 @@ class PageSignals:
                     # canonical / og:url
                     m = _RE_CANONICAL_TXT.search(head_text)
                     if m:
-                        canonical_url = m.group(1).strip()
+                        canonical_url = urljoin(str(resp.url), m.group(1).strip())
                     m = _RE_OGURL_TXT.search(head_text)
                     if m:
-                        og_url = m.group(1).strip()
+                        og_url = urljoin(str(resp.url), m.group(1).strip())
 
                     # Titolo: <title>: og:title: twitter:title
                     m = _RE_TITLE.search(head_text)
@@ -469,7 +483,7 @@ class Sanitizer:
         # Ritorno la decisione finale.
         return should_remove
 
-    async def do_redirect(self, url_iniziale: str) -> PageSignals:
+    async def do_redirect(self, url_iniziale: str) -> PageSignals | None:
 
         def meta_refresh_target(html_text: str, base_url: str) -> str | None:
             m = self.META_REFRESH_RE.search(html_text)
