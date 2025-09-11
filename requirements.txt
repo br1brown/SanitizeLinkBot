@@ -1,2 +1,3 @@
 python-telegram-bot>=20
-aiohttp
+aiohttp>=3.9
+certifi

@@ -25,6 +25,9 @@ import hashlib
 from dataclasses import dataclass
 from typing import Optional
 
+import ssl
+import os
+import certifi
 import aiohttp  # client HTTP asincrono
 
 from app_config import AppConfig  # configurazione applicativa
@@ -377,6 +380,8 @@ class Sanitizer:
 
         # Sessione HTTP aiohttp condivisa (creata lazy al primo uso).
         self._session: aiohttp.ClientSession | None = None
+        # SSLContext portabile basato su certifi
+        self._ssl_ctx: ssl.SSLContext | None = None
 
         self.META_REFRESH_RE = re.compile(
             r'<meta\s+http-equiv=["\']refresh["\']\s+content=["\']\s*\d+\s*;\s*url\s*=\s*([^"\']+)["\']',
@@ -395,6 +400,16 @@ class Sanitizer:
         """Crea (se serve) una sessione HTTP condivisa con timeout e limiti sensati."""
         # Se non esiste una sessione oppure è stata chiusa, la creo.
         if self._session is None or self._session.closed:
+            # Costruisci SSLContext con bundle CA di certifi (+ opzionale EXTRA_CA_BUNDLE)
+            if self._ssl_ctx is None:
+                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ctx.check_hostname = True
+                ctx.verify_mode = ssl.CERT_REQUIRED
+                ctx.load_verify_locations(cafile=certifi.where())
+                extra = os.getenv("EXTRA_CA_BUNDLE")
+                if extra and os.path.exists(extra):
+                    ctx.load_verify_locations(cafile=extra)
+                self._ssl_ctx = ctx
             # _get_session (log più ricco)
             logger.debug(
                 "Creating aiohttp ClientSession (timeout_total=%ss, connect_timeout=%ss, limit_per_host=%s, ttl_dns_cache=%ss)",
@@ -415,8 +430,10 @@ class Sanitizer:
                     if self.conf.connections_per_host > 0
                     else None
                 ),
+                ssl=self._ssl_ctx,
                 ttl_dns_cache=self.conf.ttl_dns_cache,
             )
+
             # Timeout totale e di connessione (prudenziale).
             timeout_config = aiohttp.ClientTimeout(
                 total=self.conf.timeout_sec,
