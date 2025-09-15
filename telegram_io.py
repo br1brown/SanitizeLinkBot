@@ -59,3 +59,29 @@ class TelegramIO:
             getattr(conf, "show_title", None),
         )
         return text
+
+    @staticmethod
+    def build_plain_output(
+        cleaned_link: tuple[str, str | None], conf: "AppConfig"
+    ) -> str:
+        if not cleaned_link:
+            logger.debug("No cleaned links to output")
+            return "nessun collegamento rilevato"
+
+        # dedup preservando l'ordine
+        cleaned_url, maybe_title = cleaned_link
+        parts: list[str] = []
+        title = (maybe_title or "").strip()
+
+        if conf.show_url:
+            if conf.show_title and title:
+                safe_title = html.escape(TelegramIO._neutralize_triggers(title))
+                parts.append(safe_title)
+        parts.append(html.escape(cleaned_url))
+
+        logger.debug(
+            "Prepared output palin text with (show_url=%s, show_title=%s)",
+            getattr(conf, "show_url", None),
+            getattr(conf, "show_title", None),
+        )
+        return "\n".join(parts)

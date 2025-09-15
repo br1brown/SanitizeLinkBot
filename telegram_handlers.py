@@ -121,30 +121,14 @@ class TelegramHandlers:
         target_message = wrapper_message.reply_to_message
         detected_links = await self.acknowledge_and_extract(target_message)
 
-        user = update.effective_user
-        chat = update.effective_chat
-
         if not detected_links:
-            logger.info(
-                "GROUP: mention by %s (@%s) in '%s' — cleaned=%d",
-                user.full_name,
-                user.username,
-                chat.title,
-                0,
-            )
+            logger.info("GROUP: mention - cleaned=%d", 0)
             return
 
         cleaned_count, reply_id = await self._sanitize_and_reply(
             target_message, detected_links
         )
-        logger.info(
-            "GROUP: mention by %s (@%s) in '%s' — cleaned=%d reply_id=%s",
-            user.full_name,
-            user.username,
-            chat.title,
-            cleaned_count,
-            reply_id,
-        )
+        logger.info("GROUP: mention - cleaned=%d reply_id=%s", cleaned_count, reply_id)
 
     async def handle_private(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -154,29 +138,13 @@ class TelegramHandlers:
             return
         message = update.effective_message
         detected_links = await self.acknowledge_and_extract(message)
-        user = update.effective_user
 
         if not detected_links:
-            logger.info(
-                "PRIVATE: from '%s' (@%s) — detected=%d cleaned=%d reply_id=%s",
-                getattr(user, "full_name", "n/a"),
-                getattr(user, "username", "n/a"),
-                0,
-                0,
-                "n/a",
-            )
+            logger.info("PRIVATE: detected=%d cleaned=%d reply_id=%s", 0, 0, "n/a")
             return
 
-        cleaned_count, reply_id = await self._sanitize_and_reply(
-            message, detected_links
-        )
-        logger.info(
-            "PRIVATE: from '%s' (@%s) — cleaned=%d reply_id=%s",
-            getattr(user, "full_name", "n/a"),
-            getattr(user, "username", "n/a"),
-            cleaned_count,
-            reply_id,
-        )
+        cleaned_count, reply_id = await self._sanitize_and_reply(message, detected_links)
+        logger.info("PRIVATE: cleaned=%d reply_id=%s", cleaned_count, reply_id)
 
     async def handle_inline(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -194,25 +162,18 @@ class TelegramHandlers:
         raw_url = urls[0]
         clean_url, maybe_title = await self.sanitizer.sanitize_url(raw_url)
         result_id = hashlib.md5(clean_url.encode("utf-8")).hexdigest()
+        reply_text = TelegramIO.build_plain_output((clean_url, maybe_title), self.conf)
 
         result = InlineQueryResultArticle(
             id=result_id,
             title=maybe_title or "URL",
             description=clean_url,
-            input_message_content=InputTextMessageContent(
-                (maybe_title or "") + "\n" + clean_url
-            ),
+            input_message_content=InputTextMessageContent(reply_text),
         )
         await inline_query.answer([result], cache_time=0, is_personal=True)
 
-        user = inline_query.from_user if hasattr(inline_query, "from_user") else None
-        logger.info(
-            "INLINE: from '%s' (@%s, id=%s) — result_id=%s",
-            getattr(user, "full_name", "n/a") if user else "n/a",
-            getattr(user, "username", "n/a") if user else "n/a",
-            getattr(user, "id", "n/a") if user else "n/a",
-            result_id,
-        )
+        # Log minimalista: nessuna PII
+        logger.info("INLINE: result_id=%s", result_id)
 
     async def cmd_start(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
