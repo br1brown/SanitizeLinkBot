@@ -12,7 +12,6 @@ from utils import (
     get_telegram_token,
     load_json_file,
     render_from_file,
-    CONFIG_PATH,
     KEYS_PATH,
 )
 import app_config
@@ -30,7 +29,7 @@ from telegram.ext import (
 )
 
 # carico configurazione e chiavi all avvio
-CONFIG = app_config.AppConfig.load(CONFIG_PATH)
+CONFIG = app_config.AppConfig.load()
 KEYS = load_json_file(KEYS_PATH)
 
 

@@ -16,7 +16,6 @@ BASE_DIR = (
     else os.getcwd()
 )
 KEYS_PATH = os.path.join(BASE_DIR, "keys.json")
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 TOKEN_PATH = os.path.join(BASE_DIR, "token.txt")
 
 # logger condiviso

@@ -1,5 +1,4 @@
 from __future__ import annotations
-from uu import Error
 
 # Modulo: sanitizer.py
 # Scopo: pulire URL (rimozione parametri di tracciamento), seguire redirect e

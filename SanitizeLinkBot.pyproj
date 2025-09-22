@@ -30,7 +30,7 @@
     <Compile Include="__main__.py" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="config.json" />
+    <Content Include="env" />
     <Content Include="help.html" />
     <Content Include="keys.json" />
     <Content Include="README.md" />
