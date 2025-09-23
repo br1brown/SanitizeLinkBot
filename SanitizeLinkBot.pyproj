@@ -26,6 +26,7 @@
     <Compile Include="sanitizer.py" />
     <Compile Include="telegram_handlers.py" />
     <Compile Include="telegram_io.py" />
+    <Compile Include="UrlTranslator.py" />
     <Compile Include="utils.py" />
     <Compile Include="__main__.py" />
   </ItemGroup>

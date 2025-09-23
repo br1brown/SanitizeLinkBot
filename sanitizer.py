@@ -1,4 +1,5 @@
 from __future__ import annotations
+from UrlTranslator import UrlTranslator
 
 # Modulo: sanitizer.py
 # Scopo: pulire URL (rimozione parametri di tracciamento), seguire redirect e
@@ -407,6 +408,9 @@ class Sanitizer:
             r'location\.replace\(\s*["\']([^"\']+)["\']\s*\)',
             r'location\.assign\(\s*["\']([^"\']+)["\']\s*\)',
         ]
+        self.TRADUCI_URL = UrlTranslator()
+        
+
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Crea (se serve) una sessione HTTP condivisa con timeout e limiti sensati."""
@@ -622,6 +626,7 @@ class Sanitizer:
         except Exception as e:
             _sig_orig = None
 
+            
         try:
             # Seguo i redirect e ottengo l'URL finale (e un eventuale titolo preliminare).
             _sig_postredir = await self.do_redirect(_input_url)
@@ -636,6 +641,9 @@ class Sanitizer:
             _sig_postredir.title if _sig_postredir and _sig_postredir.title else None
         )
         post_redirect_url = _sig_postredir.final_url if _sig_postredir else _input_url
+
+        if self.conf.translate_url:
+            post_redirect_url = self.TRADUCI_URL.translate(post_redirect_url)
 
         try:
             # Scompongo l'URL per lavorare su dominio, path, query, frammento.
