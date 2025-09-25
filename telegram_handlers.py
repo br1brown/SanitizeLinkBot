@@ -113,30 +113,6 @@ class TelegramHandlers:
             return []
         return detected_links
 
-    async def handle_groups(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-        """gestisce le menzioni al bot nei gruppi, risponde alla reply target"""
-        wrapper_message = update.effective_message
-        if not wrapper_message or not self.is_mentioned(wrapper_message, context):
-            logger.debug("Groups handler ignored because no mention or empty message")
-            return
-        if not wrapper_message.reply_to_message:
-            logger.debug("Groups handler has no reply_to_message to process")
-            return
-
-        target_message = wrapper_message.reply_to_message
-        detected_links = await self.acknowledge_and_extract(target_message)
-
-        if not detected_links:
-            logger.info("GROUP: mention - cleaned=%d", 0)
-            return
-
-        cleaned_count, reply_id = await self._sanitize_and_reply(
-            target_message, detected_links
-        )
-        logger.info("GROUP: mention - cleaned=%d reply_id=%s", cleaned_count, reply_id)
-
     async def handle_private(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
@@ -210,6 +186,24 @@ class TelegramHandlers:
         await update.message.reply_text(
             text, parse_mode=ParseMode.HTML, disable_web_page_preview=True
         )
+
+    async def cmd_sanifica(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """/sanifica — funziona SOLO se usato in risposta a un messaggio."""
+        wrapper = update.effective_message
+        if not wrapper or not wrapper.reply_to_message:
+            if wrapper:
+                await wrapper.reply_text("Usa /sanifica rispondendo a un messaggio che contiene link.")
+            return
+
+        target = wrapper.reply_to_message
+        detected_links = await self.acknowledge_and_extract(target)
+        if not detected_links:
+            return
+
+        await self._sanitize_and_reply(target, detected_links)
+
 
     def _flag(self, v: bool) -> str:
         return "🟢" if v else "🔴"  # palla verde/rossa

@@ -1,5 +1,5 @@
 {
-  "DOMAIN_WHITELIST": {},
+  "DOMAIN_WHITELIST": [],
   "EXACT_KEYS": [
     "__hsfp",
     "__hssc",

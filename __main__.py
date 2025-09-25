@@ -53,27 +53,21 @@ async def main() -> None:
     )
     handlers = TelegramHandlers(sanitizer)
 
-    # registrazione handler
-    application.add_handler(CommandHandler("start", handlers.cmd_start), group=0)
-    application.add_handler(CommandHandler("help", handlers.cmd_help), group=0)
-    application.add_handler(CommandHandler("settings", handlers.cmd_settings), group=0)
+    application.add_handler(CommandHandler("settings", handlers.cmd_settings))
     application.add_handler(CallbackQueryHandler(handlers.handle_toggle, pattern=r"^toggle:"))
+    
+    application.add_handler(InlineQueryHandler(handlers.handle_inline))
 
-    group_filter = (
-        filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND
-    )
-    application.add_handler(
-        MessageHandler(group_filter, handlers.handle_groups), group=1
-    )
-
+    application.add_handler(CommandHandler("start", handlers.cmd_start))
+    application.add_handler(CommandHandler("help", handlers.cmd_help))
+    application.add_handler(CommandHandler("sanifica", handlers.cmd_sanifica))
+    
     private_filter = (
         filters.ChatType.PRIVATE & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND
     )
     application.add_handler(
         MessageHandler(private_filter, handlers.handle_private), group=1
     )
-
-    application.add_handler(InlineQueryHandler(handlers.handle_inline), group=0)
 
     logger.info("Bot is configured and running")
 

@@ -387,10 +387,7 @@ class Sanitizer:
         self.ENDS_WITH = tuple(k.lower() for k in (ends_with or ()))
         self.FRAG_KEYS = tuple(k.lower() for k in (frag_keys or ()))
         # Creo la whitelist dei domini su cui NON applicare la pulizia parametri.
-        self.DOMAIN_WHITELIST = {
-            (domain or "").lower(): rules
-            for domain, rules in (domain_whitelist or {}).items()
-        }
+        self.DOMAIN_WHITELIST = domain_whitelist or []
         # Conservo un riferimento alla configurazione runtime.
         self.conf = conf
 
