@@ -20,6 +20,7 @@ import asyncio
 
 from telegram import Update
 from telegram.ext import (
+    CallbackQueryHandler,
     CommandHandler,
     Application,
     ContextTypes,
@@ -50,11 +51,13 @@ async def main() -> None:
         domain_whitelist=KEYS.get("DOMAIN_WHITELIST", {}),
         conf=CONFIG,
     )
-    handlers = TelegramHandlers(sanitizer, CONFIG)
+    handlers = TelegramHandlers(sanitizer)
 
     # registrazione handler
     application.add_handler(CommandHandler("start", handlers.cmd_start), group=0)
     application.add_handler(CommandHandler("help", handlers.cmd_help), group=0)
+    application.add_handler(CommandHandler("settings", handlers.cmd_settings), group=0)
+    application.add_handler(CallbackQueryHandler(handlers.handle_toggle, pattern=r"^toggle:"))
 
     group_filter = (
         filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND

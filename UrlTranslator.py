@@ -61,7 +61,6 @@ class YouTubeMusicAdapter(BaseAdapter):
     supported_hosts = ("music.youtube.com",)
 
     def translate(self, u: ParseResult) -> Optional[str]:
-        # No dedicated public YT Music frontend; mappa watch/playlist su Invidious
         base = "https://www.yewtu.be"
         q = parse_qs(u.query)
         parts = [p for p in u.path.split("/") if p]
@@ -138,7 +137,7 @@ class InstagramAdapter(BaseAdapter):
     supported_hosts = ("instagram.com",)
 
     def translate(self, u: ParseResult) -> Optional[str]:
-        base = "https://www.pixwox.com"  # alternative esistono ma la stabilità varia
+        base = "https://www.pixwox.com"
         parts = [p for p in u.path.split("/") if p]
         if parts:
             return f"{base}/{'/'.join(parts)}"

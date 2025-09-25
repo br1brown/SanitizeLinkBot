@@ -16,3 +16,4 @@ ENV/
 # Config locali e segreti
 token.txt
 config.json
+token.txt

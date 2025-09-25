@@ -35,10 +35,6 @@ def _normalize_log_level(level_value: str | None) -> str | None:
 
 @dataclass
 class AppConfig:
-    # Output
-    show_title: bool
-    show_url: bool
-    translate_url: bool
     # Batch
     max_concurrency: int
     # HTTP
@@ -56,11 +52,6 @@ class AppConfig:
         logger.debug("Loading configuration from environment variables")
 
         conf = cls(
-            # Output
-            show_title=_get_bool("OUTPUT_SHOW_TITLE", False),
-            show_url=_get_bool("OUTPUT_SHOW_URL", True),
-            translate_url=_get_bool("TRANSLATE_URL", True),
-
             # Batch
             max_concurrency=_get_int("BATCH_MAX_CONCURRENCY", 6),
 

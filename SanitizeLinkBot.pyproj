@@ -22,6 +22,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="app_config.py" />
+    <Compile Include="chat_prefs.py" />
     <Compile Include="getter_url.py" />
     <Compile Include="sanitizer.py" />
     <Compile Include="telegram_handlers.py" />
@@ -36,6 +37,7 @@
     <Content Include="keys.json" />
     <Content Include="README.md" />
     <Content Include="requirements.txt" />
+    <Content Include="settings.html" />
     <Content Include="start.html" />
     <Content Include="token.txt" />
   </ItemGroup>

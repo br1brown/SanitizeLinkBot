@@ -2,7 +2,7 @@ from __future__ import annotations
 
 # modulo: telegram_handlers.py
 # scopo: orchestrare la logica degli handler telegram e coordinare sanitizer e io
-
+import json, os
 from utils import logger, render_from_file
 import hashlib
 from collections.abc import Iterable
@@ -12,29 +12,36 @@ from telegram import (
     Update,
     MessageEntity,
     ReactionTypeEmoji,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
 )
 from telegram.constants import ChatType, ParseMode
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, CallbackQueryHandler
 
 from sanitizer import Sanitizer
 from getter_url import GetterUrl
 from telegram_io import TelegramIO
 from app_config import AppConfig
+from chat_prefs import ChatPrefs, SanitizerOpts
 
 
 class TelegramHandlers:
     """gestisce gli update telegram e prepara le risposte"""
 
-    def __init__(self, sanitizer: Sanitizer, conf: AppConfig) -> None:
+    def __init__(self, sanitizer: Sanitizer) -> None:
         self.sanitizer = sanitizer
-        self.conf = conf
+        ChatPrefs.load()
 
     async def _sanitize_and_reply(
         self, target_message, detected_links: list[str]
     ) -> tuple[int, int | None]:
-        """pulisce i link in parallelo, costruisce il testo e risponde come reply"""
-        cleaned = await self.sanitizer.sanitize_batch(detected_links)
-        reply_text = TelegramIO.build_output(cleaned, self.conf)
+        chat_id = target_message.chat.id
+        opts = ChatPrefs.build_opts(chat_id)
+
+        cleaned = await self.sanitizer.sanitize_batch(detected_links, opts=opts)
+
+        reply_text = TelegramIO.build_output(cleaned, opts)
+
         reply_message = await target_message.reply_text(
             reply_text,
             disable_web_page_preview=len(cleaned) > 1,
@@ -143,7 +150,9 @@ class TelegramHandlers:
             logger.info("PRIVATE: detected=%d cleaned=%d reply_id=%s", 0, 0, "n/a")
             return
 
-        cleaned_count, reply_id = await self._sanitize_and_reply(message, detected_links)
+        cleaned_count, reply_id = await self._sanitize_and_reply(
+            message, detected_links
+        )
         logger.info("PRIVATE: cleaned=%d reply_id=%s", cleaned_count, reply_id)
 
     async def handle_inline(
@@ -160,9 +169,14 @@ class TelegramHandlers:
             return
 
         raw_url = urls[0]
-        clean_url, maybe_title = await self.sanitizer.sanitize_url(raw_url)
+
+        # preferenze per l'utente che sta facendo l'inline
+        uid = inline_query.from_user.id
+        opts = ChatPrefs.build_opts(uid)
+
+        clean_url, maybe_title = await self.sanitizer.sanitize_url(raw_url, opts=opts)
         result_id = hashlib.md5(clean_url.encode("utf-8")).hexdigest()
-        reply_text = TelegramIO.build_plain_output((clean_url, maybe_title), self.conf)
+        reply_text = TelegramIO.build_plain_output((clean_url, maybe_title), opts)
 
         result = InlineQueryResultArticle(
             id=result_id,
@@ -196,3 +210,65 @@ class TelegramHandlers:
         await update.message.reply_text(
             text, parse_mode=ParseMode.HTML, disable_web_page_preview=True
         )
+
+    def _flag(self, v: bool) -> str:
+        return "🟢" if v else "🔴"  # palla verde/rossa
+
+    def _build_settings_keyboard(self, prefs) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"URL in chiaro {self._flag(prefs.show_url)}", callback_data="toggle:show_url")],
+            [InlineKeyboardButton(f"Titolo pagina {self._flag(prefs.show_title)}", callback_data="toggle:show_title")],
+            [InlineKeyboardButton(f"Frontend alternativo {self._flag(prefs.translate_url)}", callback_data="toggle:translate_url")],
+        ])
+
+
+    async def cmd_settings(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """mostra le impostazioni correnti della chat con bottoni toggle"""
+        try:
+            chat_id = update.effective_chat.id
+            prefs = ChatPrefs.get(chat_id)
+
+            text =  render_from_file("settings")
+
+            await update.message.reply_text(
+                text,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+                reply_markup=self._build_settings_keyboard(prefs),
+            )
+            logger.info("SETTINGS: shown for chat_id=%s", chat_id)
+        except Exception as e:
+            logger.error("Failed to render settings: %s", e)
+            await update.message.reply_text(
+                "Si è verificato un errore durante la lettura delle impostazioni."
+            )
+
+    async def handle_toggle(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """gestisce i click sui bottoni delle impostazioni"""
+        query = update.callback_query
+        await query.answer()
+        try:
+            chat_id = query.message.chat.id
+            data = query.data or ""
+            if not data.startswith("toggle:"):
+                return
+
+            key = data.split(":", 1)[1]
+            # sicurezza: consenti solo le chiavi supportate
+            if key not in {"show_url", "show_title", "translate_url"}:
+                await query.answer("Opzione non valida", show_alert=True)
+                return
+
+            current = getattr(ChatPrefs.get(chat_id), key)
+            ChatPrefs.set(chat_id, key, not current)
+
+            # ricarica prefs aggiornate e aggiorna tastiera
+            prefs = ChatPrefs.get(chat_id)
+            await query.edit_message_reply_markup(
+                reply_markup=self._build_settings_keyboard(prefs)
+            )
+        except Exception as e:
+            logger.error("Failed to toggle setting: %s", e)
+            await query.answer("Errore nell’aggiornamento", show_alert=True)

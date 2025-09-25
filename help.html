@@ -1,22 +1,30 @@
-<b>Sanitize Link - Guida rapida</b>
+<b>Sanitize Link — Guida rapida</b>
 
 <b>Chat privata</b>
-Invia uno o più link in chat per ricevere i link puliti
+Incolla uno o più link: rispondo con le versioni pulite
 
 <b>Nei gruppi</b>
-Rispondi a un messaggio che contiene link menzionandomi (<code>{mention_bot}</code>). Risponderò con link sanificati di quel messaggio
+Rispondi a un messaggio che contiene link menzionandomi (<code>{mention_bot}</code>)
+Invierò i link sanificati del messaggio a cui hai risposto
 
 <b>Ricerca inline</b>
-Scrivi <code>{mention_bot}</code> nella barra di testo di Telegram. In modalità inline viene sanificato solo il primo link rilevato
+Scrivi <code>{mention_bot}</code> nella barra di testo di Telegram e incolla un link:
+in modalità inline viene sanificato solo il primo link rilevato
+
+<b>Impostazioni per chat</b>
+Apri <code>/settings</code> e usa i pulsanti:
+- <b>URL in chiaro</b> — mostra anche l’URL oltre al titolo (se OFF, uso testo con link)
+- <b>Titolo pagina</b> — include il titolo della pagina quando disponibile
+- <b>Frontend alternativo</b> — usa front-end privacy per siti supportati
+
+Le impostazioni valgono solo per <u>questa chat</u> (privata o gruppo)
 
 <b>Cosa faccio esattamente</b>
-- Seguo i redirect fino alla destinazione finale (HTTP, meta refresh, redirect JavaScript comuni)
-- Rimuovo frammenti non necessari e parametri di tracciamento (esempio: utm, fbclid, gclid)
-- Controllo che il link pulito sia raggiungibile prima di inviarlo
+- Seguo i redirect fino alla destinazione finale, rimuovendo frammenti e parametri di tracciamento
+- Verifico che il link pulito sia raggiungibile prima di inviarlo
 
 <b>Dettagli utili</b>
-- I link tipo mailto: e tel: non vengono modificati
-- Se ci sono molti link l’anteprima è disattivata per migliorare la leggibilità
-
+- I link <code>mailto:</code> e <code>tel:</code> non vengono modificati
+- Con molti link la web-preview è disattivata per leggibilità
 
 Codice sorgente: <a href="https://github.com/br1brown/SanitizeLinkBot.git">GitHub</a>

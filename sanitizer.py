@@ -1,5 +1,6 @@
 from __future__ import annotations
 from UrlTranslator import UrlTranslator
+from chat_prefs import SanitizerOpts
 
 # Modulo: sanitizer.py
 # Scopo: pulire URL (rimozione parametri di tracciamento), seguire redirect e
@@ -30,7 +31,7 @@ import os
 import certifi
 import aiohttp  # client HTTP asincrono
 
-from app_config import AppConfig  # configurazione applicativa
+from app_config import AppConfig
 
 
 @dataclass
@@ -171,7 +172,9 @@ class PageSignals:
         return "utf-8"
 
     @staticmethod
-    async def _fetch_signals(url: str, sanita: Sanitizer) -> PageSignals | None:
+    async def _fetch_signals(
+        url: str, sanita: Sanitizer, opts: SanitizerOpts
+    ) -> PageSignals | None:
         MAX_BYTES = 512 * 1024  # 512 KB
 
         canonical_url: Optional[str] = None
@@ -191,7 +194,7 @@ class PageSignals:
         )
 
         # Strategia in base al flag
-        if sanita.conf.show_title:
+        if opts.show_title:
             max_bytes = 1_048_576  # 1 MB tetto sicurezza
             chunk_size = 16_384
         else:
@@ -281,7 +284,7 @@ class PageSignals:
                             content_type = "text/html"
 
                     # Condizione di stop
-                    if sanita.conf.show_title:
+                    if opts.show_title:
                         # Se cerco il titolo: NON fermarti su </head>. Solo </title> o tetto.
                         if (
                             _RE_TITLE_CLOSE_B.search(primo_chunk)
@@ -409,8 +412,6 @@ class Sanitizer:
             r'location\.assign\(\s*["\']([^"\']+)["\']\s*\)',
         ]
         self.TRADUCI_URL = UrlTranslator()
-        
-
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Crea (se serve) una sessione HTTP condivisa con timeout e limiti sensati."""
@@ -485,7 +486,9 @@ class Sanitizer:
         # Ritorno la decisione finale.
         return should_remove
 
-    async def do_redirect(self, url_iniziale: str) -> PageSignals | None:
+    async def do_redirect(
+        self, url_iniziale: str, opts: SanitizerOpts
+    ) -> PageSignals | None:
 
         def meta_refresh_target(html_text: str, base_url: str) -> str | None:
             m = self.META_REFRESH_RE.search(html_text)
@@ -590,48 +593,38 @@ class Sanitizer:
             break
 
         try:
-            return await PageSignals._fetch_signals(current_url, self)
+            return await PageSignals._fetch_signals(current_url, self, opts)
         except Exception as error:
             logger.exception("Error while extracting page signals")
             return None
 
-    async def sanitize_url(self, raw_url: str) -> tuple[str, str | None]:
-        """Pulisce un singolo URL: schema, redirect, query, frammenti, validazione."""
-        # Se l'input è vuoto, non elaboro e ritorno input come output con titolo None.
+    async def sanitize_url(
+        self, raw_url: str, *, opts: SanitizerOpts
+    ) -> tuple[str, str | None]:
         if not raw_url:
-            logger.debug("Received empty URL: returning as-is")
             return raw_url, None
 
         final_title: Optional[str] = None
-
-        # Normalizzo spazi ai bordi.
         _input_url = (raw_url or "").strip()
 
-        # Se lo schema è mailto: o tel:, restituisco subito senza modifiche.
         if re.match(r"^(mailto:|tel:)", _input_url, re.IGNORECASE):
-            logger.debug(
-                "Non-web protocol detected (%s): returning unchanged", _input_url
-            )
             return _input_url, None
 
-        # Se manca lo schema (es. dominio.com), premetto https://.
         if not re.match(r"^[a-zA-Z][a-zA-Z0-9+\-.]*://", _input_url):
-            logger.debug("Missing scheme in URL: prepending 'https://'")
             _input_url = "https://" + _input_url
 
         try:
-            _sig_orig: PageSignals = await PageSignals._fetch_signals(_input_url, self)
+            _sig_orig: PageSignals = await PageSignals._fetch_signals(
+                _input_url, self, opts
+            )
             if _sig_orig:
                 final_title = _sig_orig.title
-        except Exception as e:
+        except Exception:
             _sig_orig = None
 
-            
         try:
-            # Seguo i redirect e ottengo l'URL finale (e un eventuale titolo preliminare).
-            _sig_postredir = await self.do_redirect(_input_url)
+            _sig_postredir = await self.do_redirect(_input_url, opts)
         except Exception as error:
-            # In caso di errori durante i redirect, tengo l'URL "grezzo" come fallback.
             logger.info(
                 "HEAD failed on %s — falling back to GET (%s)", _input_url, error
             )
@@ -642,39 +635,26 @@ class Sanitizer:
         )
         post_redirect_url = _sig_postredir.final_url if _sig_postredir else _input_url
 
-        if self.conf.translate_url:
+        if opts.translate_url:
             post_redirect_url = self.TRADUCI_URL.translate(post_redirect_url)
 
         try:
-            # Scompongo l'URL per lavorare su dominio, path, query, frammento.
             split_parts = urlsplit(post_redirect_url)
             domain_no_www = re.sub(
                 r"^www\.", "", split_parts.netloc, flags=re.IGNORECASE
             ).lower()
-            logger.debug(
-                "Parsed final URL: domain=%s path=%s query=%s fragment=%s",
-                domain_no_www,
-                split_parts.path,
-                split_parts.query,
-                split_parts.fragment,
-            )
 
-            # Se il dominio è in whitelist, NON tocco i parametri -> ritorno subito.
             if domain_no_www in self.DOMAIN_WHITELIST:
                 return post_redirect_url, final_title
 
-            # Converto la query string in lista di (chiave, valore) mantenendo chiavi vuote.
             original_query_params = parse_qsl(split_parts.query, keep_blank_values=True)
-            # Filtro i parametri in base alle regole di rimozione.
             filtered_query_params = [
                 (param_key, param_value)
                 for (param_key, param_value) in original_query_params
                 if not self.is_key_to_remove(param_key)
             ]
-            # Ricostruisco la nuova query string (doseq=True gestisce liste di valori).
             new_query_string = urlencode(filtered_query_params, doseq=True)
 
-            # Gestione del frammento (parte dopo #): posso rimuoverne alcuni per prefisso.
             new_fragment = split_parts.fragment
             if new_fragment:
                 lowered_fragment = new_fragment.lstrip("#").lower()
@@ -683,7 +663,6 @@ class Sanitizer:
                 ):
                     new_fragment = ""
 
-            # Ricompongo l'URL con schema, host, path, nuova query e nuovo frammento.
             final_url = urlunsplit(
                 (
                     split_parts.scheme,
@@ -706,12 +685,10 @@ class Sanitizer:
 
                 try:
                     _sig_clean: PageSignals = await PageSignals._fetch_signals(
-                        final_url, self
+                        final_url, self, opts
                     )
-
                     if _sig_clean and _sig_clean.title:
                         final_title = _sig_clean.title
-
                 except Exception:
                     _sig_clean = None
 
@@ -729,69 +706,54 @@ class Sanitizer:
 
             return final_url, final_title
 
-        except Exception as error:
-            # Qualunque errore nella sanificazione di dettaglio -> ritorno l'URL post-redirect.
+        except Exception:
             logger.exception(
                 "Error during detailed sanitization: returning raw post-redirect URL"
             )
 
-        # Fallback finale DI TUTTO.
         return post_redirect_url, final_title
 
-    async def sanitize_batch(self, links: list[str]) -> list[tuple[str, str | None]]:
-        """Pulisce una lista di URL con deduplica e limite di concorrenza."""
-        # Normalizzo ciascun input rimuovendo spazi di contorno.
+    async def sanitize_batch(
+        self, links: list[str], *, opts: SanitizerOpts
+    ) -> list[tuple[str, str | None]]:
         normalized_inputs = [(url or "").strip() for url in links]
 
-        # Deduplica preservando gli indici originali (OrderedDict: url -> lista indici).
-        url_index_map: "OrderedDict[str, list[int]]" = OrderedDict()
+        url_index_map: OrderedDict[str, list[int]] = OrderedDict()
         for index, url in enumerate(normalized_inputs):
             if url:
                 url_index_map.setdefault(url, []).append(index)
 
-        # Se non c'è nessun URL valido, ritorno una lista di placeholder vuoti.
         if not url_index_map:
             return [("", None) for _ in normalized_inputs]
 
-        # Creo (o riuso) un semaforo per limitare la concorrenza.
         concurrency_semaphore = getattr(
             self, "_semaforo", asyncio.Semaphore(self.conf.max_concurrency)
         )
 
         async def process_one_url(input_url: str) -> tuple[str, str | None]:
-            """Elabora un singolo URL all'interno del semaforo."""
             async with concurrency_semaphore:
                 try:
-                    return await self.sanitize_url(input_url)
+                    return await self.sanitize_url(input_url, opts=opts)
                 except Exception:
-                    # In caso di errore, ritorno l'URL originale senza titolo.
                     return (input_url, None)
 
-        # Avvio i task per ciascun URL unico.
         tasks_by_url = {
-            input_url: asyncio.create_task(process_one_url(input_url))
-            for input_url in url_index_map
+            u: asyncio.create_task(process_one_url(u)) for u in url_index_map
         }
-        # Attendo il completamento di tutti i task, conservando eventuali eccezioni.
         task_results = await asyncio.gather(
             *tasks_by_url.values(), return_exceptions=True
         )
 
-        # Ricompongo un dizionario url -> (url_pulito, titolo) gestendo eccezioni per singolo task.
         cleaned_by_url: dict[str, tuple[str, str | None]] = {}
         for input_url, task_result in zip(tasks_by_url.keys(), task_results):
-            if isinstance(task_result, Exception):
-                cleaned_by_url[input_url] = (input_url, None)
-            else:
-                cleaned_by_url[input_url] = task_result
+            cleaned_by_url[input_url] = (
+                (input_url, None) if isinstance(task_result, Exception) else task_result
+            )
 
-        # Preparo l'output nella stessa lunghezza/posizione della lista iniziale.
         output_list: list[tuple[str, str | None]] = [
             ("", None) for _ in normalized_inputs
         ]
         for input_url, original_indexes in url_index_map.items():
             for idx in original_indexes:
                 output_list[idx] = cleaned_by_url[input_url]
-
-        # Ritorno la lista finale di risultati (url_pulito, eventuale_titolo).
         return output_list

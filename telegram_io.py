@@ -1,4 +1,5 @@
 from __future__ import annotations
+from chat_prefs import SanitizerOpts
 
 # modulo: telegram_io.py
 # scopo: comporre il testo di risposta da inviare su telegram in html semplice
@@ -24,7 +25,7 @@ class TelegramIO:
 
     @staticmethod
     def build_output(
-        cleaned_links: list[tuple[str, str | None]], conf: "AppConfig"
+        cleaned_links: list[tuple[str, str | None]], opts: SanitizerOpts
     ) -> str:
         if not cleaned_links:
             logger.debug("No cleaned links to output")
@@ -36,13 +37,13 @@ class TelegramIO:
             parts: list[str] = []
             title = (maybe_title or "").strip()
 
-            if conf.show_url:
-                if conf.show_title and title:
+            if opts.show_url:
+                if opts.show_title and title:
                     safe_title = html.escape(TelegramIO._neutralize_triggers(title))
                     parts.append(f"<blockquote>{safe_title}</blockquote>")
                 parts.append(html.escape(cleaned_url))
             else:
-                if conf.show_title and title:
+                if opts.show_title and title:
                     safe_title = html.escape(TelegramIO._neutralize_triggers(title))
                     safe_href = html.escape(cleaned_url, quote=True)
                     parts.append(f'<a href="{safe_href}">{safe_title}</a>')
@@ -55,14 +56,14 @@ class TelegramIO:
         logger.debug(
             "Prepared output text with %d blocks (show_url=%s, show_title=%s)",
             len(blocks),
-            getattr(conf, "show_url", None),
-            getattr(conf, "show_title", None),
+            getattr(opts, "show_url", None),
+            getattr(opts, "show_title", None),
         )
         return text
 
     @staticmethod
     def build_plain_output(
-        cleaned_link: tuple[str, str | None], conf: "AppConfig"
+        cleaned_link: tuple[str, str | None], opts: SanitizerOpts
     ) -> str:
         if not cleaned_link:
             logger.debug("No cleaned links to output")
@@ -73,15 +74,15 @@ class TelegramIO:
         parts: list[str] = []
         title = (maybe_title or "").strip()
 
-        if conf.show_url:
-            if conf.show_title and title:
+        if opts.show_url:
+            if opts.show_title and title:
                 safe_title = html.escape(TelegramIO._neutralize_triggers(title))
                 parts.append(safe_title)
         parts.append(html.escape(cleaned_url))
 
         logger.debug(
             "Prepared output palin text with (show_url=%s, show_title=%s)",
-            getattr(conf, "show_url", None),
-            getattr(conf, "show_title", None),
+            getattr(opts, "show_url", None),
+            getattr(opts, "show_title", None),
         )
         return "\n".join(parts)
