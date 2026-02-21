@@ -109,6 +109,22 @@ async def main() -> None:
 
     await application.initialize()
     await application.start()
+    me = await application.bot.get_me()
+    missing_botfather_flags = []
+    if not bool(getattr(me, "supports_inline_queries", False)):
+        missing_botfather_flags.append("Inline Mode")
+    if not bool(getattr(me, "can_join_groups", False)):
+        missing_botfather_flags.append("Allow Groups")
+    if missing_botfather_flags:
+        logger.error(
+            "Startup aborted: enable in BotFather before first use: %s",
+            ", ".join(missing_botfather_flags),
+        )
+        await application.stop()
+        await application.shutdown()
+        await sanitizer.close()
+        return
+
     await application.bot.set_my_commands([
         BotCommand("start", "Messaggio di benvenuto"),
         BotCommand("help", "Come usare il bot"),
