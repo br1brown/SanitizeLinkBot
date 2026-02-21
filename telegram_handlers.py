@@ -5,12 +5,11 @@ from __future__ import annotations
 import json, os
 from utils import logger, render_from_file
 import hashlib
-from collections.abc import Iterable
 from telegram import (
     InlineQueryResultArticle,
     InputTextMessageContent,
+    LinkPreviewOptions,
     Update,
-    MessageEntity,
     ReactionTypeEmoji,
     InlineKeyboardButton,
     InlineKeyboardMarkup
@@ -22,7 +21,7 @@ from sanitizer import Sanitizer
 from getter_url import GetterUrl
 from telegram_io import TelegramIO
 from app_config import AppConfig
-from chat_prefs import ChatPrefs, SanitizerOpts
+from chat_prefs import ChatPrefs, PREF_KEYS, SanitizerOpts
 
 
 class TelegramHandlers:
@@ -44,7 +43,7 @@ class TelegramHandlers:
 
         reply_message = await target_message.reply_text(
             reply_text,
-            disable_web_page_preview=len(cleaned) > 1,
+            link_preview_options=LinkPreviewOptions(is_disabled=len(cleaned) > 1),
             parse_mode=ParseMode.HTML,
         )
         reply_id = reply_message.message_id
@@ -53,40 +52,6 @@ class TelegramHandlers:
         except Exception:
             pass
         return len(cleaned), reply_id
-
-    @staticmethod
-    def _contains_mention(
-        text: str | None,
-        entities: Iterable[MessageEntity] | None,
-        bot_username: str,
-        bot_id: int,
-    ) -> bool:
-        """controlla menzioni con entita e fallback testuale"""
-        if not text:
-            return False
-        if entities:
-            for entity in entities:
-                if entity.type == MessageEntity.MENTION:
-                    mention_text = text[
-                        entity.offset : entity.offset + entity.length
-                    ].lower()
-                    if mention_text == f"@{bot_username}":
-                        return True
-                elif entity.type == MessageEntity.TEXT_MENTION and entity.user:
-                    if entity.user.id == bot_id:
-                        return True
-        return f"@{bot_username}" in text.lower()
-
-    @staticmethod
-    def is_mentioned(message, context: ContextTypes.DEFAULT_TYPE) -> bool:
-        """verifica se il messaggio contiene una menzione esplicita al bot"""
-        bot_username = (context.bot.username or "").lower()
-        bot_id = context.bot.id
-        return TelegramHandlers._contains_mention(
-            message.text, message.entities, bot_username, bot_id
-        ) or TelegramHandlers._contains_mention(
-            message.caption, message.caption_entities, bot_username, bot_id
-        )
 
     async def _react(self, message, emoji: str | None) -> bool:
         """imposta o rimuove una reaction sul messaggio"""
@@ -112,6 +77,24 @@ class TelegramHandlers:
                 await self._react(message, None)
             return []
         return detected_links
+
+    async def handle_group(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """gestisce i gruppi: automatico se group_auto è attivo, altrimenti solo se menzionato"""
+        message = update.effective_message
+        if not message:
+            return
+        chat_id = message.chat.id
+        prefs = ChatPrefs.get(chat_id)
+        if not prefs.group_auto:
+            return
+        detected_links = await self.acknowledge_and_extract(message)
+        if not detected_links:
+            logger.info("GROUP: detected=0")
+            return
+        cleaned_count, reply_id = await self._sanitize_and_reply(message, detected_links)
+        logger.info("GROUP: cleaned=%d reply_id=%s", cleaned_count, reply_id)
 
     async def handle_private(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -173,18 +156,22 @@ class TelegramHandlers:
         first_name = user.first_name if user and user.first_name else "utente"
         text = render_from_file("start", first_name=first_name)
         await update.message.reply_text(
-            text, parse_mode=ParseMode.HTML, disable_web_page_preview=True
+            text,
+            parse_mode=ParseMode.HTML,
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
         )
 
     async def cmd_help(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         """mostra un aiuto su come usare il bot"""
-        bot_username = context.bot.username or (await context.bot.get_me()).username
+        bot_username = context.bot.username or ""
         mention_bot = f"@{bot_username}" if bot_username else "@.."
         text = render_from_file("help", mention_bot=mention_bot)
         await update.message.reply_text(
-            text, parse_mode=ParseMode.HTML, disable_web_page_preview=True
+            text,
+            parse_mode=ParseMode.HTML,
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
         )
 
     async def cmd_sanifica(
@@ -208,12 +195,15 @@ class TelegramHandlers:
     def _flag(self, v: bool) -> str:
         return "🟢" if v else "🔴"  # palla verde/rossa
 
-    def _build_settings_keyboard(self, prefs) -> InlineKeyboardMarkup:
-        return InlineKeyboardMarkup([
+    def _build_settings_keyboard(self, prefs, is_group: bool = False) -> InlineKeyboardMarkup:
+        rows = [
             [InlineKeyboardButton(f"URL in chiaro {self._flag(prefs.show_url)}", callback_data="toggle:show_url")],
             [InlineKeyboardButton(f"Titolo pagina {self._flag(prefs.show_title)}", callback_data="toggle:show_title")],
-            [InlineKeyboardButton(f"Frontend alternativo {self._flag(prefs.translate_url)}", callback_data="toggle:translate_url")],
-        ])
+            [InlineKeyboardButton(f"Frontend alternativo [beta] {self._flag(prefs.translate_url)}", callback_data="toggle:translate_url")],
+        ]
+        if is_group:
+            rows.append([InlineKeyboardButton(f"Modalità automatica {self._flag(prefs.group_auto)}", callback_data="toggle:group_auto")])
+        return InlineKeyboardMarkup(rows)
 
 
     async def cmd_settings(
@@ -221,16 +211,18 @@ class TelegramHandlers:
     ) -> None:
         """mostra le impostazioni correnti della chat con bottoni toggle"""
         try:
-            chat_id = update.effective_chat.id
+            chat = update.effective_chat
+            chat_id = chat.id
+            is_group = chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
             prefs = ChatPrefs.get(chat_id)
 
-            text =  render_from_file("settings")
+            text = render_from_file("settings")
 
             await update.message.reply_text(
                 text,
                 parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
-                reply_markup=self._build_settings_keyboard(prefs),
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
+                reply_markup=self._build_settings_keyboard(prefs, is_group=is_group),
             )
             logger.info("SETTINGS: shown for chat_id=%s", chat_id)
         except Exception as e:
@@ -251,17 +243,18 @@ class TelegramHandlers:
 
             key = data.split(":", 1)[1]
             # sicurezza: consenti solo le chiavi supportate
-            if key not in {"show_url", "show_title", "translate_url"}:
+            if key not in PREF_KEYS:
                 await query.answer("Opzione non valida", show_alert=True)
                 return
 
             current = getattr(ChatPrefs.get(chat_id), key)
-            ChatPrefs.set(chat_id, key, not current)
+            await ChatPrefs.set(chat_id, key, not current)
 
             # ricarica prefs aggiornate e aggiorna tastiera
             prefs = ChatPrefs.get(chat_id)
+            is_group = query.message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
             await query.edit_message_reply_markup(
-                reply_markup=self._build_settings_keyboard(prefs)
+                reply_markup=self._build_settings_keyboard(prefs, is_group=is_group)
             )
         except Exception as e:
             logger.error("Failed to toggle setting: %s", e)

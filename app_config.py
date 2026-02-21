@@ -73,7 +73,6 @@ class AppConfig:
     def __repr__(self) -> str:
         return (
             "AppConfig("
-            f"show_title={self.show_title}, show_url={self.show_url}, "
             f"max_concurrency={self.max_concurrency}, connections_per_host={self.connections_per_host}, "
             f"max_redirects={self.max_redirects}, timeout_sec={self.timeout_sec}, "
             f"ttl_dns_cache={self.ttl_dns_cache}, valida_link_post_pulizia={self.valida_link_post_pulizia}, "

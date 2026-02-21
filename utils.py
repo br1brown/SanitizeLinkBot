@@ -17,7 +17,6 @@ BASE_DIR = (
 )
 KEYS_PATH = os.path.join(BASE_DIR, "keys.json")
 TOKEN_PATH = os.path.join(BASE_DIR, "token.txt")
-CHAT_PREFS_PATH = os.path.join(BASE_DIR, "chat_prefs.json")
 
 # logger condiviso
 _LOGGER_NAME = "puliscilink"

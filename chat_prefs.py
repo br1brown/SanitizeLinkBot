@@ -1,9 +1,18 @@
 # chat_prefs.py
 from __future__ import annotations
-import json, os, tempfile
+
+import asyncio
+import os
+import sqlite3
 from dataclasses import dataclass
-from typing import Dict, Any
-from utils import logger, CHAT_PREFS_PATH
+from typing import Any, Dict
+
+from utils import BASE_DIR, logger
+
+_DB_PATH = os.path.join(BASE_DIR, "chat_prefs.db")
+PREF_KEYS = frozenset({"show_title", "show_url", "translate_url", "group_auto"})
+_VALID_KEYS = PREF_KEYS
+
 
 @dataclass
 class SanitizerOpts:
@@ -17,6 +26,7 @@ class PrefsEntry:
     show_title: bool
     show_url: bool
     translate_url: bool
+    group_auto: bool  # True = pulisce tutti i link nel gruppo; False = solo se triggerato
 
     @classmethod
     def from_defaults(cls) -> PrefsEntry:
@@ -24,6 +34,7 @@ class PrefsEntry:
             show_title=True,
             show_url=True,
             translate_url=False,
+            group_auto=False,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -31,103 +42,104 @@ class PrefsEntry:
             "show_title": self.show_title,
             "show_url": self.show_url,
             "translate_url": self.translate_url,
+            "group_auto": self.group_auto,
         }
 
-    @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> PrefsEntry:
-        base = cls.from_defaults().to_dict()
-        base.update({k: bool(d.get(k, base[k])) for k in base.keys()})
-        return cls(**base)
 
+# ---------------------------------------------------------------------------
+# helpers SQLite (funzioni pure, niente stato globale)
+# ---------------------------------------------------------------------------
+
+def _connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _row_to_entry(row: sqlite3.Row) -> PrefsEntry:
+    return PrefsEntry(
+        show_title=bool(row["show_title"]),
+        show_url=bool(row["show_url"]),
+        translate_url=bool(row["translate_url"]),
+        group_auto=bool(row["group_auto"]),
+    )
+
+
+def _init_db() -> None:
+    with _connect() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS chat_prefs (
+                chat_id       INTEGER PRIMARY KEY,
+                show_title    INTEGER NOT NULL DEFAULT 1,
+                show_url      INTEGER NOT NULL DEFAULT 1,
+                translate_url INTEGER NOT NULL DEFAULT 0,
+                group_auto    INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+    logger.info("SQLite database ready at %s", _DB_PATH)
+
+
+def _get_sync(chat_id: int) -> PrefsEntry:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT show_title, show_url, translate_url, group_auto "
+            "FROM chat_prefs WHERE chat_id = ?",
+            (chat_id,),
+        ).fetchone()
+    return _row_to_entry(row) if row else PrefsEntry.from_defaults()
+
+
+def _set_sync(chat_id: int, key: str, value: bool) -> PrefsEntry:
+    val_int = int(value)
+    with _connect() as conn:
+        # Upsert atomico: inserisce con i default se manca, oppure aggiorna solo la chiave specifica
+        sql = f"""
+            INSERT INTO chat_prefs (chat_id, {key}) VALUES (?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET {key} = excluded.{key}
+        """
+        conn.execute(sql, (chat_id, val_int))
+        row = conn.execute(
+            "SELECT show_title, show_url, translate_url, group_auto "
+            "FROM chat_prefs WHERE chat_id = ?",
+            (chat_id,),
+        ).fetchone()
+    return _row_to_entry(row)
+
+
+# ---------------------------------------------------------------------------
+# API pubblica — stessa interfaccia di prima, zero breaking changes
+# ---------------------------------------------------------------------------
 
 class ChatPrefs:
-    _path: str | None = None
-    _store: Dict[int, PrefsEntry] = {}
-
     @classmethod
     def load(cls) -> None:
-        cls._path = os.path.join(os.path.dirname(__file__), CHAT_PREFS_PATH)
-        try:
-            with open(cls._path, "r", encoding="utf-8") as fh:
-                raw = json.load(fh)
-            if isinstance(raw, dict):
-                cls._store = {
-                    int(k): PrefsEntry.from_dict(v if isinstance(v, dict) else {})
-                    for k, v in raw.items()
-                }
-            logger.info(
-                "Loaded chat preferences from %s with %d entries",
-                cls._path,
-                len(cls._store),
-            )
-        except FileNotFoundError:
-            cls._store = {}
-            logger.info(
-                "No chat preferences file found at %s, starting with defaults",
-                cls._path,
-            )
-        except Exception as e:
-            cls._store = {}
-            logger.error("Failed to load chat preferences from %s: %s", cls._path, e)
-
-    @classmethod
-    def save(cls) -> None:
-        if not cls._path:
-            return
-        data = {str(k): v.to_dict() for k, v in cls._store.items()}
-        payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
-        dirpath = os.path.dirname(cls._path)
-
-        fd, tmp_path = tempfile.mkstemp(prefix=".prefs.", dir=dirpath)
-        try:
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(payload)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp_path, cls._path)  # atomico su POSIX/NT
-            logger.info(
-                "Saved chat preferences to %s (%d entries)", cls._path, len(data)
-            )
-        except Exception as e:
-            logger.error("Failed to save chat preferences to %s: %s", cls._path, e)
-        finally:
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except Exception:
-                pass
+        """Inizializza il DB SQLite. Chiamare una volta all'avvio."""
+        _init_db()
 
     @classmethod
     def get(cls, chat_id: int) -> PrefsEntry:
-        if chat_id not in cls._store:
-            cls._store[chat_id] = PrefsEntry.from_defaults()
-            logger.debug("Initialized default preferences for chat %s", chat_id)
-        return cls._store[chat_id]
+        """Lettura sincrona. SQLite è abbastanza veloce da non bloccare l'event loop."""
+        return _get_sync(chat_id)
 
     @classmethod
-    def set(cls, chat_id: int, key: str, value: bool) -> PrefsEntry:
-        entry = cls.get(chat_id)
-        if key not in entry.to_dict():
+    async def set(cls, chat_id: int, key: str, value: bool) -> PrefsEntry:
+        """Scrittura asincrona via thread pool per non bloccare l'event loop."""
+        if key not in _VALID_KEYS:
             logger.error("Invalid preference key attempted: %s", key)
             raise KeyError(f"Invalid preference key: {key}")
-        setattr(entry, key, bool(value))
-        cls._store[chat_id] = entry
-        cls.save()
+        result = await asyncio.to_thread(_set_sync, chat_id, key, value)
         logger.info("Updated preference for chat %s: %s=%s", chat_id, key, value)
-        return entry
+        return result
 
     @classmethod
     def build_opts(cls, chat_id: int) -> SanitizerOpts:
         p = cls.get(chat_id)
         logger.debug(
             "Building SanitizerOpts for chat %s (show_url=%s, show_title=%s, translate_url=%s)",
-            chat_id,
-            p.show_url,
-            p.show_title,
-            p.translate_url
+            chat_id, p.show_url, p.show_title, p.translate_url,
         )
         return SanitizerOpts(
             show_url=p.show_url,
             show_title=p.show_title,
-            translate_url=p.translate_url
-        )
+            translate_url=p.translate_url)

@@ -17,3 +17,4 @@ ENV/
 token.txt
 config.json
 token.txt
+chat_prefs.db
