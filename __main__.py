@@ -115,6 +115,8 @@ async def main() -> None:
         missing_botfather_flags.append("Inline Mode")
     if not bool(getattr(me, "can_join_groups", False)):
         missing_botfather_flags.append("Allow Groups")
+    if not bool(getattr(me, "can_read_all_group_messages", False)):
+        missing_botfather_flags.append("Privacy ON")
     if missing_botfather_flags:
         logger.error(
             "Startup aborted: enable in BotFather before first use: %s",
