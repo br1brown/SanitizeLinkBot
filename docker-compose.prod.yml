@@ -1,0 +1,31 @@
+# Production configuration
+services:
+  sanitizelinkbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sanitizelinkbot:latest
+    container_name: sanitizelinkbot-prod
+    environment:
+      - PYTHONUNBUFFERED=1
+      - ENVIRONMENT=production
+    env_file:
+      - .env.docker
+    volumes:
+      - bot-data:/app/data
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - bot-network
+
+networks:
+  bot-network:
+    driver: bridge
+
+volumes:
+  bot-data:
+    driver: local

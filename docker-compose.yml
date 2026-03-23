@@ -1,0 +1,24 @@
+services:
+  sanitizelinkbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sanitizelinkbot
+    image: sanitizelinkbot:latest
+    environment:
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - .env.docker
+    volumes:
+      - bot-data:/app/data
+    restart: unless-stopped
+    networks:
+      - bot-network
+
+networks:
+  bot-network:
+    driver: bridge
+
+volumes:
+  bot-data:
+    driver: local
