@@ -1,0 +1,15 @@
+NOTICE — Third-Party Licenses
+
+This project uses the following third-party libraries:
+
+- python-telegram-bot (LGPLv3)
+  https://github.com/python-telegram-bot/python-telegram-bot
+  License: GNU Lesser General Public License v3.0
+
+- aiohttp (Apache License 2.0)
+  https://github.com/aio-libs/aiohttp
+  License: Apache License 2.0
+
+- certifi (Mozilla Public License 2.0)
+  https://github.com/certifi/python-certifi
+  License: MPL 2.0
