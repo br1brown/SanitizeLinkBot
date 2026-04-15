@@ -118,14 +118,10 @@ async def main() -> None:
     if not bool(getattr(me, "can_read_all_group_messages", False)):
         missing_botfather_flags.append("Privacy ON")
     if missing_botfather_flags:
-        logger.error(
-            "Startup aborted: enable in BotFather before first use: %s",
+        logger.warning(
+            "Some BotFather settings may be missing: %s",
             ", ".join(missing_botfather_flags),
         )
-        await application.stop()
-        await application.shutdown()
-        await sanitizer.close()
-        return
 
     await application.bot.set_my_commands([
         BotCommand("start", "Messaggio di benvenuto"),

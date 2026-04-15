@@ -9,7 +9,9 @@ from typing import Any, Dict
 
 from utils import BASE_DIR, logger
 
-_DB_PATH = os.path.join(BASE_DIR, "chat_prefs.db")
+_DATA_DIR = os.path.join(BASE_DIR, "data")
+os.makedirs(_DATA_DIR, exist_ok=True)
+_DB_PATH = os.path.join(_DATA_DIR, "chat_prefs.db")
 PREF_KEYS = frozenset({"show_title", "show_url", "translate_url", "group_auto"})
 _VALID_KEYS = PREF_KEYS
 

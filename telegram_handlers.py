@@ -203,6 +203,7 @@ class TelegramHandlers:
         ]
         if is_group:
             rows.append([InlineKeyboardButton(f"Modalità automatica {self._flag(prefs.group_auto)}", callback_data="toggle:group_auto")])
+        rows.append([InlineKeyboardButton("Chiudi ✕", callback_data="toggle:close")])
         return InlineKeyboardMarkup(rows)
 
 
@@ -216,7 +217,7 @@ class TelegramHandlers:
             is_group = chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
             prefs = ChatPrefs.get(chat_id)
 
-            text = render_from_file("settings")
+            text = render_from_file("settings_group" if is_group else "settings_private")
 
             await update.message.reply_text(
                 text,
@@ -242,6 +243,25 @@ class TelegramHandlers:
                 return
 
             key = data.split(":", 1)[1]
+
+            if key == "close":
+                prefs = ChatPrefs.get(chat_id)
+                summary = (
+                    f"⚙️ <b>Impostazioni</b>\n"
+                    f"URL in chiaro {self._flag(prefs.show_url)}  "
+                    f"Titolo {self._flag(prefs.show_title)}  "
+                    f"Frontend alt. {self._flag(prefs.translate_url)}"
+                )
+                is_group = query.message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
+                if is_group:
+                    summary += f"  Modalità auto {self._flag(prefs.group_auto)}"
+                await query.edit_message_text(
+                    summary,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=None,
+                )
+                return
+
             # sicurezza: consenti solo le chiavi supportate
             if key not in PREF_KEYS:
                 await query.answer("Opzione non valida", show_alert=True)
