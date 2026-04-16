@@ -89,9 +89,15 @@ class TelegramHandlers:
         prefs = ChatPrefs.get(chat_id)
         if not prefs.group_auto:
             return
+        # in modalità automatica estraiamo i link senza reagire:
+        # non vogliamo mettere ❌ su ogni messaggio senza link
+        detected_links = GetterUrl.urls_from_message(message)
+        if not detected_links:
+            logger.debug("GROUP auto: no links, skipping silently")
+            return
+        # link trovati: ora usiamo il flusso normale con reaction 👀
         detected_links = await self.acknowledge_and_extract(message)
         if not detected_links:
-            logger.info("GROUP: detected=0")
             return
         cleaned_count, reply_id = await self._sanitize_and_reply(message, detected_links)
         logger.info("GROUP: cleaned=%d reply_id=%s", cleaned_count, reply_id)

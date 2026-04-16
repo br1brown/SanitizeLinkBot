@@ -20,21 +20,30 @@ SanitizeLinkBot è un bot Telegram che rende i link più semplici da condividere
 
 ## Frontend alternativi supportati
 
-Quando la funzione **Frontend alternativo** è attiva, i link ai seguenti siti vengono reindirizzati a versioni privacy-friendly:
+Quando la funzione **Frontend alternativo** è attiva, i link ai seguenti siti vengono reindirizzati a versioni privacy-friendly.
+
+**Attivi:**
 
 | Sito originale | Frontend alternativo |
 |---|---|
-| YouTube / YouTube Music | Invidious (yewtu.be) |
-| Twitter / X | Nitter |
-| Reddit | Teddit |
-| TikTok | ProxiTok |
-| Instagram | Pixwox |
-| Wikipedia | Wikiless |
-| Tumblr | Priviblur |
-| Genius | Intellectual |
-| Goodreads | BiblioReads |
+| YouTube / YouTube Music | Invidious (inv.nadeko.net) |
+| Twitter / X | xcancel.com |
+| TikTok | ProxiTok (proxitok.pufe.org) |
+| Wikipedia | wl.vern.cc |
 | Google Ricerca | DuckDuckGo |
 | Google Maps | OpenStreetMap |
+
+**Disabilitati — frontend offline:**
+
+| Sito originale | Ultimo frontend | Motivo |
+|---|---|---|
+| Reddit | teddit.net | Offline |
+| Instagram | pixwox.com | Offline, nessun sostituto affidabile |
+| Tumblr | tb.opnxng.com (Priviblur) | Offline |
+| Genius | intellectual.insprill.net | Offline |
+| Goodreads | biblioreads.eu.org | Offline, nessun sostituto affidabile |
+
+L'ecosistema dei frontend alternativi è in continua evoluzione: le istanze pubbliche vengono spesso dismesse senza preavviso. Gli adapter disabilitati sono mantenuti nel codice commentati e possono essere riattivati non appena si trovano istanze sostitutive stabili.
 
 
 ## Come si usa

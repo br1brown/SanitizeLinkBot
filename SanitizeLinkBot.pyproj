@@ -11,6 +11,7 @@
     <OutputPath>.</OutputPath>
     <Name>SanitizeLinkBot</Name>
     <RootNamespace>SanitizeLinkBot</RootNamespace>
+    <InterpreterId>Global|3.9|x64</InterpreterId>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
     <DebugSymbols>true</DebugSymbols>
@@ -37,7 +38,6 @@
     <Content Include="keys.json" />
     <Content Include="README.md" />
     <Content Include="requirements.txt" />
-    <Content Include="settings.html" />
     <Content Include="start.html" />
     <Content Include="token.txt" />
   </ItemGroup>

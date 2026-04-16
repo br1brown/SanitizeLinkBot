@@ -18,7 +18,7 @@ class BaseAdapter:
     def filter_query(qs, keep: Sequence[str]) -> dict:
         return {k: qs[k][0] for k in keep if k in qs}
 
-# ---------------- Adapters ----------------
+# ---------------- Adapters attivi ----------------
 
 class YouTubeAdapter(BaseAdapter):
     supported_hosts = ("youtube.com", "m.youtube.com", "youtu.be")
@@ -28,7 +28,7 @@ class YouTubeAdapter(BaseAdapter):
         parts = [p for p in u.path.split("/") if p]
         q = parse_qs(u.query)
 
-        base = "https://www.yewtu.be"
+        base = "https://inv.nadeko.net"
 
         if host == "youtu.be" and parts:
             vid = parts[0]
@@ -61,7 +61,7 @@ class YouTubeMusicAdapter(BaseAdapter):
     supported_hosts = ("music.youtube.com",)
 
     def translate(self, u: ParseResult) -> Optional[str]:
-        base = "https://www.yewtu.be"
+        base = "https://inv.nadeko.net"
         q = parse_qs(u.query)
         parts = [p for p in u.path.split("/") if p]
         if u.path == "/watch":
@@ -81,7 +81,7 @@ class TwitterAdapter(BaseAdapter):
 
     def translate(self, u: ParseResult) -> Optional[str]:
         parts = [p for p in u.path.split("/") if p]
-        base = "https://nitter.net"  # in alternativa: vxtwitter
+        base = "https://xcancel.com"
         if len(parts) >= 3 and parts[1] == "status":
             return f"{base}/{parts[0]}/status/{parts[2]}"
         if parts:
@@ -89,36 +89,10 @@ class TwitterAdapter(BaseAdapter):
         return None
 
 
-class RedditAdapter(BaseAdapter):
-    supported_hosts = ("reddit.com", "old.reddit.com")
-
-    def translate(self, u: ParseResult) -> Optional[str]:
-        parts = [p for p in u.path.split("/") if p]
-        base = "https://teddit.net"
-        if parts:
-            return f"{base}/{'/'.join(parts)}" + (f"?{u.query}" if u.query else "")
-        return f"{base}/"
-
-
-class TumblrAdapter(BaseAdapter):
-    supported_hosts = ("tumblr.com",)
-
-    def translate(self, u: ParseResult) -> Optional[str]:
-        # Priviblur mapping: https://tb.opnxng.com/u/<blog>[/post/...]
-        parts = [p for p in u.path.split("/") if p]
-        if len(parts) >= 1:
-            blog = parts[0]
-            rest = "/".join(parts[1:])
-            base = f"https://tb.opnxng.com/u/{blog}"
-            return f"{base}/{rest}" if rest else base
-        return None
-
-
 class TikTokAdapter(BaseAdapter):
     supported_hosts = ("tiktok.com", "vm.tiktok.com")
 
     def translate(self, u: ParseResult) -> Optional[str]:
-        # ProxiTok accetta path tipo /@user/video/<id>
         base = "https://proxitok.pufe.org"
         host = u.netloc.lower().removeprefix("www.")
         parts = [p for p in u.path.split("/") if p]
@@ -128,75 +102,40 @@ class TikTokAdapter(BaseAdapter):
             return None
 
         if parts:
-            # Mantiene il path cos� com'�; ProxiTok gestisce i percorsi standard
             return f"{base}/{'/'.join(parts)}"
-        return base
-
-
-class InstagramAdapter(BaseAdapter):
-    supported_hosts = ("instagram.com",)
-
-    def translate(self, u: ParseResult) -> Optional[str]:
-        base = "https://www.pixwox.com"
-        parts = [p for p in u.path.split("/") if p]
-        if parts:
-            return f"{base}/{'/'.join(parts)}"
-        return None
-
-
-class GeniusAdapter(BaseAdapter):
-    supported_hosts = ("genius.com",)
-
-    def translate(self, u: ParseResult) -> Optional[str]:
-        base = "https://intellectual.insprill.net"
-        parts = [p for p in u.path.split("/") if p]
-        if parts:
-            return f"{base}/{'/'.join(parts)}"
-        return None
-
-
-class GoodreadsAdapter(BaseAdapter):
-    supported_hosts = ("goodreads.com",)
-
-    def translate(self, u: ParseResult) -> Optional[str]:
-        base = "https://biblioreads.eu.org"
-        parts = [p for p in u.path.split("/") if p]
-        if parts:
-            return f"{base}/{'/'.join(parts)}" + (f"?{u.query}" if u.query else "")
         return base
 
 
 class WikipediaAdapter(BaseAdapter):
-    supported_hosts = ("wikipedia.org",)
+    supported_hosts = ()  # match_host è sovrascritto
+
+    def match_host(self, host: str) -> bool:
+        return host == "wikipedia.org" or host.endswith(".wikipedia.org")
 
     def translate(self, u: ParseResult) -> Optional[str]:
-        # https://<lang>.wikipedia.org/wiki/Title -> https://wikiless.org/<lang>/wiki/Title
+        # https://<lang>.wikipedia.org/wiki/Title -> https://wl.vern.cc/<lang>/wiki/Title
         host = u.netloc.lower()
         m = re.match(r"^([a-z-]+)\.wikipedia\.org$", host.removeprefix("www."))
         if not m:
             return None
         lang = m.group(1)
         parts = [p for p in u.path.split("/") if p]
-        return f"https://wikiless.org/{lang}/{'/'.join(parts)}" if parts else f"https://wikiless.org/{lang}/"
+        return f"https://wl.vern.cc/{lang}/{'/'.join(parts)}" if parts else f"https://wl.vern.cc/{lang}/"
 
 
 class GoogleSearchAdapter(BaseAdapter):
     supported_hosts = ("google.com",)
 
     def translate(self, u: ParseResult) -> Optional[str]:
-        # gestiamo solo /search con parametro q
         if u.path != "/search":
             return None
         q = parse_qs(u.query)
         if "q" not in q:
             return None
-        params = {"q": q["q"][0]}
-        # Redirect Google searches to DuckDuckGo
-        return f"https://duckduckgo.com/?{urlencode(params)}"
+        return f"https://duckduckgo.com/?{urlencode({'q': q['q'][0]})}"
 
 
 class GoogleMapsAdapter(BaseAdapter):
-    # Restringiamo a maps.google.com per evitare collisione con GoogleSearchAdapter
     supported_hosts = ("maps.google.com",)
 
     def translate(self, u: ParseResult) -> Optional[str]:
@@ -206,18 +145,71 @@ class GoogleMapsAdapter(BaseAdapter):
         return "https://www.openstreetmap.org/"
 
 
+# ---------------- Adapters disabilitati (frontend morti) ----------------
+# I seguenti adapter sono commentati perché i frontend alternativi
+# a cui puntavano sono offline. Riabilitarli non appena si trovano
+# istanze sostitutive funzionanti.
+
+# class RedditAdapter(BaseAdapter):
+#     # teddit.net — offline
+#     supported_hosts = ("reddit.com", "old.reddit.com")
+#     def translate(self, u: ParseResult) -> Optional[str]:
+#         parts = [p for p in u.path.split("/") if p]
+#         base = "https://teddit.net"
+#         if parts:
+#             return f"{base}/{'/'.join(parts)}" + (f"?{u.query}" if u.query else "")
+#         return f"{base}/"
+
+# class InstagramAdapter(BaseAdapter):
+#     # pixwox.com — offline, nessun sostituto affidabile trovato
+#     supported_hosts = ("instagram.com",)
+#     def translate(self, u: ParseResult) -> Optional[str]:
+#         base = "https://www.pixwox.com"
+#         parts = [p for p in u.path.split("/") if p]
+#         if parts:
+#             return f"{base}/{'/'.join(parts)}"
+#         return None
+
+# class TumblrAdapter(BaseAdapter):
+#     # tb.opnxng.com (Priviblur) — offline
+#     supported_hosts = ("tumblr.com",)
+#     def translate(self, u: ParseResult) -> Optional[str]:
+#         parts = [p for p in u.path.split("/") if p]
+#         if len(parts) >= 1:
+#             blog = parts[0]
+#             rest = "/".join(parts[1:])
+#             base = f"https://tb.opnxng.com/u/{blog}"
+#             return f"{base}/{rest}" if rest else base
+#         return None
+
+# class GeniusAdapter(BaseAdapter):
+#     # intellectual.insprill.net — offline
+#     supported_hosts = ("genius.com",)
+#     def translate(self, u: ParseResult) -> Optional[str]:
+#         base = "https://intellectual.insprill.net"
+#         parts = [p for p in u.path.split("/") if p]
+#         if parts:
+#             return f"{base}/{'/'.join(parts)}"
+#         return None
+
+# class GoodreadsAdapter(BaseAdapter):
+#     # biblioreads.eu.org — offline, nessun sostituto affidabile trovato
+#     supported_hosts = ("goodreads.com",)
+#     def translate(self, u: ParseResult) -> Optional[str]:
+#         base = "https://biblioreads.eu.org"
+#         parts = [p for p in u.path.split("/") if p]
+#         if parts:
+#             return f"{base}/{'/'.join(parts)}" + (f"?{u.query}" if u.query else "")
+#         return base
+
+
 class UrlTranslator:
     def __init__(self, adapters: Optional[List[Type[BaseAdapter]]] = None):
         classes = adapters or [
             YouTubeAdapter,
             YouTubeMusicAdapter,
             TwitterAdapter,
-            RedditAdapter,
-            TumblrAdapter,
             TikTokAdapter,
-            InstagramAdapter,
-            GeniusAdapter,
-            GoodreadsAdapter,
             WikipediaAdapter,
             GoogleSearchAdapter,
             GoogleMapsAdapter,

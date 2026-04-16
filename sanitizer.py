@@ -364,7 +364,7 @@ class Sanitizer:
         self.PREFIX_KEYS = tuple(k.lower() for k in (prefix_keys or ()))
         self.ENDS_WITH = tuple(k.lower() for k in (ends_with or ()))
         self.FRAG_KEYS = tuple(k.lower() for k in (frag_keys or ()))
-        self.DOMAIN_WHITELIST = domain_whitelist or []
+        self.DOMAIN_WHITELIST = set(domain_whitelist or [])
         self.conf = conf
 
         self._session: aiohttp.ClientSession | None = None
