@@ -11,7 +11,8 @@
     <OutputPath>.</OutputPath>
     <Name>SanitizeLinkBot</Name>
     <RootNamespace>SanitizeLinkBot</RootNamespace>
-    <InterpreterId>Global|3.9|x64</InterpreterId>
+    <SuppressEnvironmentCreationPrompt>True</SuppressEnvironmentCreationPrompt>
+    <InterpreterId>Global|PythonCore|3.13</InterpreterId>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
     <DebugSymbols>true</DebugSymbols>
@@ -40,6 +41,9 @@
     <Content Include="requirements.txt" />
     <Content Include="start.html" />
     <Content Include="token.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <InterpreterReference Include="Global|PythonCore|3.13" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in

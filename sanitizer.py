@@ -664,7 +664,7 @@ class Sanitizer:
             return post_redirect_url, final_title
 
     async def sanitize_batch(
-        self, links: list[str], *, opts: SanitizerOpts
+        self, opts: SanitizerOpts, links: list[str]
     ) -> list[tuple[str, str | None]]:
         normalized_inputs = [(url or "").strip() for url in links]
 

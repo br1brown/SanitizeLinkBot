@@ -21,3 +21,4 @@ chat_prefs.db
 
 # Docker
 .env.docker
+data

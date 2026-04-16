@@ -27,32 +27,47 @@ class YouTubeAdapter(BaseAdapter):
         host = u.netloc.lower().removeprefix("www.")
         parts = [p for p in u.path.split("/") if p]
         q = parse_qs(u.query)
-
         base = "https://inv.nadeko.net"
+        
+        # Gestione parametri temporali comuni
+        time_params = ("t", "time_continue", "start")
 
+        # YouTu.be short links
         if host == "youtu.be" and parts:
             vid = parts[0]
-            return f"{base}/watch?{urlencode({'v': vid})}"
+            keep = self.filter_query(q, time_params)
+            return f"{base}/watch?{urlencode({'v': vid, **keep})}"
 
+        # Standard Watch Video
         if u.path == "/watch":
             vid = q.get("v", [None])[0]
             if vid:
-                keep = self.filter_query(q, ("t", "time_continue", "start"))
+                keep = self.filter_query(q, time_params)
                 return f"{base}/watch?{urlencode({'v': vid, **keep})}"
 
+        # YouTube Shorts -> Invidious Watch
         if len(parts) >= 2 and parts[0] == "shorts":
-            return f"{base}/watch?{urlencode({'v': parts[1]})}"
+            vid = parts[1]
+            keep = self.filter_query(q, time_params)
+            return f"{base}/watch?{urlencode({'v': vid, **keep})}"
 
-        if parts and parts[0].startswith("@"):
-            return f"{base}/{parts[0]}"
+        # Canali (Handles @name, /channel/ID, /c/Name)
+        if parts:
+            if parts[0].startswith("@"):
+                return f"{base}/{parts[0]}"
+            if len(parts) >= 2 and parts[0] in {"channel", "c"}:
+                return f"{base}/{parts[0]}/{parts[1]}"
 
-        if len(parts) >= 2 and parts[0] in {"channel", "c"}:
-            return f"{base}/{'/'.join(parts[:2])}"
-
-        if parts and parts[0] in {"playlist"}:
+        # Playlist
+        if u.path == "/playlist" or (parts and parts[0] == "playlist"):
             list_id = q.get("list", [None])[0]
             if list_id:
                 return f"{base}/playlist?{urlencode({'list': list_id})}"
+
+        # Ricerca
+        if u.path == "/results":
+            sq = q.get("search_query", [None])[0]
+            if sq: return f"{base}/search?{urlencode({'q': sq})}"
 
         return None
 
