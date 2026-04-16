@@ -77,7 +77,8 @@ class TelegramHandlers:
         
         cleaned = await self.sanitizer.sanitize_batch(opts, detected)
         
-        from utils import urls_are_semantically_equivalent
+        from .utils import urls_are_semantically_equivalent
+        
         is_unchanged = len(cleaned) == len(detected) and all(
             urls_are_semantically_equivalent(c[0], d) for c, d in zip(cleaned, detected)
         )

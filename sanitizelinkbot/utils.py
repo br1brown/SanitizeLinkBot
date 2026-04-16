@@ -157,6 +157,12 @@ def urls_are_semantically_equivalent(url1: str | None, url2: str | None) -> bool
         return urlunparse((scheme, netloc, path, p.params, query, p.fragment))
         
     try:
-        return _normalize(url1) == _normalize(url2)
-    except Exception:
-        return url1 == url2
+        is_eq = _normalize(url1) == _normalize(url2)
+        if not is_eq:
+            logger.info("Link differs semantically! Originale: %s | Pulito: %s", url2, url1)
+        return is_eq
+    except Exception as e:
+        is_eq = url1 == url2
+        if not is_eq:
+            logger.info("Link differs (Semantic check failed: %s)! Originale: %s | Pulito: %s", e, url2, url1)
+        return is_eq
