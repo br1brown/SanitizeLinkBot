@@ -159,10 +159,10 @@ def urls_are_semantically_equivalent(url1: str | None, url2: str | None) -> bool
     try:
         is_eq = _normalize(url1) == _normalize(url2)
         if not is_eq:
-            logger.info("Link differs semantically! Originale: %s | Pulito: %s", url2, url1)
+            logger.debug("Link differs semantically")
         return is_eq
     except Exception as e:
         is_eq = url1 == url2
         if not is_eq:
-            logger.info("Link differs (Semantic check failed: %s)! Originale: %s | Pulito: %s", e, url2, url1)
+            logger.debug("Link differs (semantic check failed: %s)", e)
         return is_eq
