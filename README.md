@@ -13,9 +13,10 @@ SanitizeLinkBot è un bot Telegram che rende i link più semplici da condividere
 - **Preferenze configurabili per chat** tramite `/settings` con pulsanti inline
 - **Whitelist di domini**: possibilità di escludere certi domini da modifiche
 - **Elaborazione in batch con concorrenza**: sanificazione di più link in parallelo con deduplicazione
+- **Cache LRU per gli URL**: gli URL già elaborati vengono riutilizzati senza ripetere fetch e redirect (dimensione configurabile via `CACHE_MAX_SIZE`)
 - **Modalità inline**: `@NomeDelBot <link>` restituisce la versione sanificata
 - **Uso nei gruppi**: comando `/sanifica` su un messaggio contenente link, oppure **modalità automatica** che elabora ogni messaggio con link
-- **Feedback visivo**: reaction 👀 durante l'elaborazione, ❌ se nessun link viene trovato
+- **Feedback visivo**: reaction 👀 durante l'elaborazione; 👍 se il link era già pulito; ❌ (con fallback 👎) se non viene trovato nessun link
 
 
 ## Frontend alternativi supportati
@@ -48,10 +49,13 @@ L'ecosistema dei frontend alternativi è in continua evoluzione: le istanze pubb
 
 ## Come si usa
 
-- **Chat privata**: invia un messaggio con uno o più link e il bot risponde con le versioni pulite
+- **Chat privata**: invia un messaggio con uno o più link e il bot risponde sempre con le versioni pulite (o conferma che erano già puliti)
 - **Nei gruppi**:
   - Rispondi a un messaggio con `/sanifica` per pulire i link di quel messaggio
-  - Oppure attiva la **Modalità automatica** in `/settings`: il bot elaborerà ogni messaggio con link senza bisogno di comandi
+  - Oppure attiva la **Modalità automatica** in `/settings`: il bot elabora ogni messaggio con link automaticamente
+    - Se il link è già pulito, risponde con una reaction 👍 senza aggiungere messaggi in chat
+    - Se qualcosa cambia (tracking rimosso, frontend tradotto, redirect risolto), invia la versione pulita
+    - I messaggi senza link vengono ignorati silenziosamente
 - **Ricerca inline**: digita `@NomeDelBot <link>` nella barra di testo
 - **Impostazioni**: usa `/settings` per decidere come devono essere mostrati i risultati
 
@@ -104,7 +108,7 @@ docker logs -f sanitizelinkbot
 ### Requisiti
 
 - Python 3.10+
-- Dipendenze: `python-telegram-bot >= 20`, `aiohttp`, `certifi`
+- Dipendenze: `python-telegram-bot >= 20`, `aiohttp`, `certifi`; su Linux/Mac viene installato automaticamente anche `uvloop` per performance migliori
 
 ```bash
 pip install -r requirements.txt
@@ -115,12 +119,12 @@ pip install -r requirements.txt
 Il token può essere fornito in uno dei seguenti modi:
 
 - Variabile di ambiente `TELEGRAM_BOT_TOKEN` (consigliato)
-- File `token.txt` nella directory del progetto — comodo per chi vuole avviare il bot velocemente senza toccare variabili d'ambiente, ma sconsigliato: il file potrebbe finire accidentalmente in un commit o in un backup
+- File `token.txt` nella directory del progetto — comodo per avvii rapidi, ma sconsigliato: il file potrebbe finire accidentalmente in un commit o in un backup
 
 ### Avvio
 
 ```bash
-python __main__.py
+python -m sanitizelinkbot
 ```
 
 
@@ -140,14 +144,15 @@ Definisce i parametri da rimuovere e le whitelist:
 }
 ```
 
-### File `env`
+### File `.env-example`
 
-Variabili di configurazione tecnica. Non sovrascrivono variabili già presenti nell'ambiente di sistema.
+Copia il file come `.env` (o `env`) e adattalo. Le variabili non sovrascrivono quelle già presenti nell'ambiente di sistema.
 
 | Variabile | Default | Descrizione |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | — | Token del bot (alternativa a `token.txt`) |
 | `BATCH_MAX_CONCURRENCY` | `6` | Link elaborati in parallelo |
+| `CACHE_MAX_SIZE` | `100` | Numero massimo di URL tenuti in cache LRU |
 | `HTTP_MAX_REDIRECTS` | `30` | Numero massimo di redirect seguiti |
 | `HTTP_TIMEOUT_SEC` | `30` | Timeout HTTP in secondi |
 | `HTTP_CONNECTIONS_PER_HOST` | `10` | Connessioni simultanee per host |
@@ -160,22 +165,25 @@ Variabili di configurazione tecnica. Non sovrascrivono variabili già presenti n
 
 ```
 .
-├── __main__.py              # Entry point principale
-├── app_config.py            # Configurazione da variabili d'ambiente
-├── chat_prefs.py            # Gestione preferenze per chat (SQLite)
-├── getter_url.py            # Estrazione URL dai messaggi Telegram
-├── sanitizer.py             # Sanificazione, follow redirect, validazione
-├── telegram_io.py           # Formattazione output per Telegram
-├── telegram_handlers.py     # Handler comandi ed eventi
-├── utils.py                 # Funzioni di utilità condivise
-├── UrlTranslator.py         # Reindirizzamento a frontend alternativi
+├── sanitizelinkbot/         # Pacchetto Python principale
+│   ├── __init__.py
+│   ├── __main__.py          # Entry point (python -m sanitizelinkbot)
+│   ├── app_config.py        # Configurazione da variabili d'ambiente
+│   ├── chat_prefs.py        # Gestione preferenze per chat (SQLite)
+│   ├── getter_url.py        # Estrazione URL dai messaggi Telegram
+│   ├── sanitizer.py         # Sanificazione, follow redirect, validazione, cache LRU
+│   ├── telegram_handlers.py # Handler comandi ed eventi
+│   ├── telegram_io.py       # Formattazione output per Telegram
+│   ├── UrlTranslator.py     # Reindirizzamento a frontend alternativi
+│   └── utils.py             # Funzioni di utilità condivise
+├── templates/               # Template HTML per i messaggi del bot
+│   ├── start.html           # Messaggio di benvenuto
+│   ├── help.html            # Guida rapida
+│   ├── settings_private.html
+│   └── settings_group.html
 ├── requirements.txt         # Dipendenze Python
 ├── keys.json                # Regole di sanificazione e whitelist domini
-├── env                      # Variabili di configurazione (non sensibili)
+├── .env-example             # Esempio variabili di configurazione
 ├── Dockerfile               # Immagine Docker
-├── docker-compose.yml       # Configurazione Docker Compose
-├── start.html               # Template messaggio di benvenuto
-├── help.html                # Template guida rapida
-├── settings_private.html    # Template impostazioni (chat privata)
-└── settings_group.html      # Template impostazioni (gruppo)
+└── docker-compose.yml       # Configurazione Docker Compose
 ```

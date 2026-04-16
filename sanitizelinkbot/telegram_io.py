@@ -1,13 +1,13 @@
 from __future__ import annotations
-from chat_prefs import SanitizerOpts
+from .chat_prefs import SanitizerOpts
 
 # modulo: telegram_io.py
 # scopo: comporre il testo di risposta da inviare su telegram in html semplice
 
-from utils import logger
+from .utils import logger
 import re
 import html
-from app_config import AppConfig
+from .app_config import AppConfig
 
 
 class TelegramIO:

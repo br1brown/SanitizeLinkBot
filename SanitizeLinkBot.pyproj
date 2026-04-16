@@ -4,7 +4,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>c1b2950f-74ca-4bdf-8a66-46c7ee15fe73</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>__main__.py</StartupFile>
+    <StartupFile>sanitizelinkbot\__main__.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -23,27 +23,33 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="app_config.py" />
-    <Compile Include="chat_prefs.py" />
-    <Compile Include="getter_url.py" />
-    <Compile Include="sanitizer.py" />
-    <Compile Include="telegram_handlers.py" />
-    <Compile Include="telegram_io.py" />
-    <Compile Include="UrlTranslator.py" />
-    <Compile Include="utils.py" />
-    <Compile Include="__main__.py" />
+    <Compile Include="sanitizelinkbot\app_config.py" />
+    <Compile Include="sanitizelinkbot\chat_prefs.py" />
+    <Compile Include="sanitizelinkbot\getter_url.py" />
+    <Compile Include="sanitizelinkbot\sanitizer.py" />
+    <Compile Include="sanitizelinkbot\telegram_handlers.py" />
+    <Compile Include="sanitizelinkbot\telegram_io.py" />
+    <Compile Include="sanitizelinkbot\UrlTranslator.py" />
+    <Compile Include="sanitizelinkbot\utils.py" />
+    <Compile Include="sanitizelinkbot\__main__.py" />
+    <Compile Include="sanitizelinkbot\__init__.py" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="env" />
-    <Content Include="help.html" />
+    <Content Include="templates\help.html" />
+    <Content Include="templates\settings_group.html" />
+    <Content Include="templates\settings_private.html" />
     <Content Include="keys.json" />
     <Content Include="README.md" />
     <Content Include="requirements.txt" />
-    <Content Include="start.html" />
+    <Content Include="templates\start.html" />
     <Content Include="token.txt" />
   </ItemGroup>
   <ItemGroup>
     <InterpreterReference Include="Global|PythonCore|3.13" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="sanitizelinkbot\" />
+    <Folder Include="templates\" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in

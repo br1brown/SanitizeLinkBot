@@ -7,9 +7,9 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Dict
 
-from utils import BASE_DIR, logger
+from .utils import PROJECT_ROOT, logger
 
-_DATA_DIR = os.path.join(BASE_DIR, "data")
+_DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 os.makedirs(_DATA_DIR, exist_ok=True)
 _DB_PATH = os.path.join(_DATA_DIR, "chat_prefs.db")
 PREF_KEYS = frozenset({"show_title", "show_url", "translate_url", "group_auto"})
@@ -114,6 +114,8 @@ def _set_sync(chat_id: int, key: str, value: bool) -> PrefsEntry:
 # ---------------------------------------------------------------------------
 
 class ChatPrefs:
+    _cache: dict[int, PrefsEntry] = {}
+
     @classmethod
     def load(cls) -> None:
         """Inizializza il DB SQLite. Chiamare una volta all'avvio."""
@@ -121,8 +123,12 @@ class ChatPrefs:
 
     @classmethod
     def get(cls, chat_id: int) -> PrefsEntry:
-        """Lettura sincrona. SQLite è abbastanza veloce da non bloccare l'event loop."""
-        return _get_sync(chat_id)
+        """Lettura in cache. SQLite solo se manca la chiave nel pool."""
+        if chat_id in cls._cache:
+            return cls._cache[chat_id]
+        entry = _get_sync(chat_id)
+        cls._cache[chat_id] = entry
+        return entry
 
     @classmethod
     async def set(cls, chat_id: int, key: str, value: bool) -> PrefsEntry:
@@ -131,6 +137,7 @@ class ChatPrefs:
             logger.error("Invalid preference key attempted: %s", key)
             raise KeyError(f"Invalid preference key: {key}")
         result = await asyncio.to_thread(_set_sync, chat_id, key, value)
+        cls._cache[chat_id] = result
         logger.info("Updated preference for chat %s: %s=%s", chat_id, key, value)
         return result
 

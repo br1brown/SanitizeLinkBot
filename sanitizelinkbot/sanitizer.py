@@ -1,12 +1,12 @@
 from __future__ import annotations
-from UrlTranslator import UrlTranslator
-from chat_prefs import SanitizerOpts
+from .UrlTranslator import UrlTranslator
+from .chat_prefs import SanitizerOpts
 
 # Modulo: sanitizer.py
 # Scopo: pulire URL (rimozione parametri di tracciamento), seguire redirect e
 #        opzionalmente estrarre il titolo della pagina finale.
 
-from utils import logger
+from .utils import logger
 from collections import OrderedDict
 
 import re
@@ -30,7 +30,7 @@ import os
 import certifi
 import aiohttp
 
-from app_config import AppConfig
+from .app_config import AppConfig
 
 
 @dataclass
@@ -370,6 +370,9 @@ class Sanitizer:
         self._session: aiohttp.ClientSession | None = None
         self._ssl_ctx: ssl.SSLContext | None = None
 
+        self._cache_lru: OrderedDict[str, tuple[str, str | None]] = OrderedDict()
+        self._cache_maxlen = conf.cache_max_size
+
         # FIX 5: semaforo persistente, creato una volta sola
         self._semaforo = asyncio.Semaphore(conf.max_concurrency)
 
@@ -565,6 +568,24 @@ class Sanitizer:
 
         if not re.match(r"^[a-zA-Z][a-zA-Z0-9+\-.]*://", _input_url):
             _input_url = "https://" + _input_url
+
+        cache_key = f"{_input_url}|{opts.show_title}|{opts.translate_url}"
+        if cache_key in self._cache_lru:
+            cached_result = self._cache_lru.pop(cache_key)
+            self._cache_lru[cache_key] = cached_result
+            return cached_result
+
+        final_url, final_title = await self._sanitize_url_impl(_input_url, opts=opts)
+
+        while len(self._cache_lru) >= self._cache_maxlen:
+            self._cache_lru.popitem(last=False)
+        self._cache_lru[cache_key] = (final_url, final_title)
+        return final_url, final_title
+
+    async def _sanitize_url_impl(
+        self, _input_url: str, *, opts: SanitizerOpts
+    ) -> tuple[str, str | None]:
+        # Alla base c'è sempre l'input url già preparato
 
         # FIX 4: una sola fetch iniziale tramite do_redirect (che segue i redirect
         # e poi fa _fetch_signals sull'URL finale). Questo sostituisce sia la vecchia

@@ -7,7 +7,10 @@ import os
 import json
 import html
 import logging
+import functools
+import re
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 # base path e nomi file standard
 BASE_DIR = (
@@ -15,8 +18,9 @@ BASE_DIR = (
     if "__file__" in globals()
     else os.getcwd()
 )
-KEYS_PATH = os.path.join(BASE_DIR, "keys.json")
-TOKEN_PATH = os.path.join(BASE_DIR, "token.txt")
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
+KEYS_PATH = os.path.join(PROJECT_ROOT, "keys.json")
+TOKEN_PATH = os.path.join(PROJECT_ROOT, "token.txt")
 
 # logger condiviso
 _LOGGER_NAME = "puliscilink"
@@ -76,11 +80,16 @@ def load_json_file(path: str, *, required: bool = False) -> dict:
     return data
 
 
+@functools.lru_cache(maxsize=32)
+def _read_template(filename: str) -> str:
+    path = os.path.join(PROJECT_ROOT, "templates", filename + ".html")
+    with open(path, "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
 def render_from_file(filename: str, **ctx) -> str:
     """carica un template html e fa format con escape semplice"""
-    path = os.path.join(BASE_DIR, filename + ".html")
-    with open(path, "r", encoding="utf-8") as fh:
-        template = fh.read()
+    template = _read_template(filename)
     safe_ctx = {k: html.escape(str(v)) for k, v in ctx.items()}
     return template.format(**safe_ctx)
 
@@ -102,3 +111,52 @@ def get_telegram_token() -> str:
             "Missing Telegram token. Set TELEGRAM_BOT_TOKEN or create token.txt"
         )
         raise RuntimeError("missing TELEGRAM_BOT_TOKEN or token.txt") from err
+
+
+def urls_are_semantically_equivalent(url1: str | None, url2: str | None) -> bool:
+    """Verifica se due URL sono spazialmente uguali
+    (ignora differenze minime come http vs https, www., trailing slashes o ordine query)"""
+    if not url1 and not url2:
+        return True
+    if not url1 or not url2:
+        return False
+    if url1 == url2:
+        return True
+
+    def _normalize(u: str) -> str:
+        u = u.strip()
+        if not re.match(r"^[a-zA-Z][a-zA-Z0-9+\-.]*://", u):
+            u = "https://" + u
+            
+        p = urlparse(u)
+        scheme = p.scheme.lower()
+        if scheme == "http":
+            scheme = "https"
+            
+        netloc = p.netloc.lower()
+        if netloc.startswith("www."):
+            netloc = netloc[4:]
+            
+        if ":" in netloc:
+            parts = netloc.split(":")
+            if (scheme == "https" and parts[-1] == "443") or (scheme == "http" and parts[-1] == "80"):
+                netloc = ":".join(parts[:-1])
+                
+        path = p.path
+        if path == "":
+            path = "/"
+        elif path != "/" and path.endswith("/"):
+            path = path[:-1]
+            
+        query = p.query
+        if query:
+            qsl = parse_qsl(query, keep_blank_values=True)
+            qsl.sort()
+            query = urlencode(qsl, doseq=True)
+            
+        return urlunparse((scheme, netloc, path, p.params, query, p.fragment))
+        
+    try:
+        return _normalize(url1) == _normalize(url2)
+    except Exception:
+        return url1 == url2

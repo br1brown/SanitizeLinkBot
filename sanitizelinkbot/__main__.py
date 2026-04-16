@@ -3,19 +3,26 @@ from __future__ import annotations
 # modulo: __main__.py
 # scopo: punto di ingresso del bot, crea l app telegram, registra gli handler e avvia il polling
 
-from sanitizer import Sanitizer
-from telegram_handlers import TelegramHandlers
+# scopre se viene eseguito da Visual Studio come script diretto e lo converte in modulo
+if __name__ == "__main__" and not __package__:
+    import sys, os, runpy
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    runpy.run_module("sanitizelinkbot", run_name="__main__")
+    sys.exit()
 
-from utils import (
+from .sanitizer import Sanitizer
+from .telegram_handlers import TelegramHandlers
+
+from .utils import (
     logger,
     set_log_level,
     get_telegram_token,
     load_json_file,
     render_from_file,
     KEYS_PATH,
-    BASE_DIR,
+    PROJECT_ROOT,
 )
-import app_config
+from . import app_config
 
 import asyncio
 import os
@@ -35,7 +42,7 @@ from telegram.ext import (
 def _load_env_file() -> None:
     """Carica variabili d'ambiente dal file 'env' se presente.
     Non sovrascrive variabili già impostate nell'ambiente."""
-    env_path = os.path.join(BASE_DIR, "env")
+    env_path = os.path.join(PROJECT_ROOT, "env")
     if not os.path.isfile(env_path):
         logger.debug("No env file found at %s, skipping", env_path)
         return
@@ -67,7 +74,7 @@ async def main() -> None:
     """avvia il bot, registra gli handler e mantiene il polling"""
     try:
         telegram_token = get_telegram_token()
-        application = Application.builder().token(telegram_token).build()
+        application = Application.builder().token(telegram_token).concurrent_updates(True).build()
     except RuntimeError as error:
         logger.error("Startup aborted due to invalid configuration: %s", error)
         return
@@ -143,6 +150,13 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    try:
+        import uvloop
+        uvloop.install()
+        logger.info("uvloop enabled for asyncio performance boost")
+    except ImportError:
+        pass
+
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

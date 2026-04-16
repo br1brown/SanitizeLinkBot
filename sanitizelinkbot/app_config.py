@@ -37,6 +37,7 @@ def _normalize_log_level(level_value: str | None) -> str | None:
 class AppConfig:
     # Batch
     max_concurrency: int
+    cache_max_size: int
     # HTTP
     connections_per_host: int
     max_redirects: int
@@ -54,6 +55,7 @@ class AppConfig:
         conf = cls(
             # Batch
             max_concurrency=_get_int("BATCH_MAX_CONCURRENCY", 6),
+            cache_max_size=_get_int("CACHE_MAX_SIZE", 100),
 
             # HTTP
             connections_per_host=_get_int("HTTP_CONNECTIONS_PER_HOST", 10),
@@ -73,7 +75,7 @@ class AppConfig:
     def __repr__(self) -> str:
         return (
             "AppConfig("
-            f"max_concurrency={self.max_concurrency}, connections_per_host={self.connections_per_host}, "
+            f"max_concurrency={self.max_concurrency}, cache_max_size={self.cache_max_size}, connections_per_host={self.connections_per_host}, "
             f"max_redirects={self.max_redirects}, timeout_sec={self.timeout_sec}, "
             f"ttl_dns_cache={self.ttl_dns_cache}, valida_link_post_pulizia={self.valida_link_post_pulizia}, "
             f"log_level={self.log_level})"

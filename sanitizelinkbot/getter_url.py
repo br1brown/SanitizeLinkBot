@@ -3,7 +3,7 @@ from __future__ import annotations
 # modulo: getter_url.py
 # scopo: estrarre url da testo o dalle entita di telegram
 
-from utils import logger
+from .utils import logger
 import re
 from collections.abc import Iterable
 from telegram import MessageEntity

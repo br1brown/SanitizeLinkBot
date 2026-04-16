@@ -3,7 +3,7 @@ from __future__ import annotations
 # modulo: telegram_handlers.py
 # scopo: orchestrare la logica degli handler telegram e coordinare sanitizer e io
 import hashlib
-from utils import logger, render_from_file
+from .utils import logger, render_from_file
 from telegram import (
     InlineQueryResultArticle,
     InputTextMessageContent,
@@ -16,10 +16,10 @@ from telegram import (
 from telegram.constants import ChatType, ParseMode
 from telegram.ext import ContextTypes
 
-from sanitizer import Sanitizer
-from getter_url import GetterUrl
-from telegram_io import TelegramIO
-from chat_prefs import ChatPrefs, PREF_KEYS, SanitizerOpts
+from .sanitizer import Sanitizer
+from .getter_url import GetterUrl
+from .telegram_io import TelegramIO
+from .chat_prefs import ChatPrefs, PREF_KEYS, SanitizerOpts
 
 
 class TelegramHandlers:
@@ -40,11 +40,7 @@ class TelegramHandlers:
                 logger.debug("Unable to set reaction %r: %s", emoji, err)
         return False
 
-    @staticmethod
-    def _with_scheme(url: str) -> str:
-        """aggiunge https:// se manca lo schema, per confronto con l'output di sanitize_url"""
-        url = (url or "").strip()
-        return url if "://" in url else "https://" + url
+
 
     async def _send_cleaned_reply(self, target_message, cleaned, opts: SanitizerOpts):
         """Helper interno per inviare l'output sanificato"""
@@ -53,6 +49,7 @@ class TelegramHandlers:
             reply_text,
             link_preview_options=LinkPreviewOptions(is_disabled=len(cleaned) > 1),
             parse_mode=ParseMode.HTML,
+            quote=True,
         )
 
     async def handle_group(
@@ -80,7 +77,11 @@ class TelegramHandlers:
         
         cleaned = await self.sanitizer.sanitize_batch(opts, detected)
         
-        if [c[0] for c in cleaned] == [self._with_scheme(u) for u in detected]:
+        from utils import urls_are_semantically_equivalent
+        is_unchanged = len(cleaned) == len(detected) and all(
+            urls_are_semantically_equivalent(c[0], d) for c, d in zip(cleaned, detected)
+        )
+        if is_unchanged:
             # Feedback discreto: link già pulito, nessuna risposta in chat
             await self._react(message, "👍")
         else:
@@ -117,7 +118,7 @@ class TelegramHandlers:
         wrapper = update.effective_message
         if not wrapper or not wrapper.reply_to_message:
             if wrapper:
-                await wrapper.reply_text("Usa /sanifica in risposta a un messaggio con link.")
+                await wrapper.reply_text("Usa /sanifica in risposta a un messaggio con link.", quote=True)
             return
 
         target = wrapper.reply_to_message
