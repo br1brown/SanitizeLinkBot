@@ -49,7 +49,7 @@ class TelegramHandlers:
             reply_text,
             link_preview_options=LinkPreviewOptions(is_disabled=len(cleaned) > 1),
             parse_mode=ParseMode.HTML,
-            quote=True,
+            do_quote=True,
         )
 
     async def handle_group(
@@ -119,7 +119,7 @@ class TelegramHandlers:
         wrapper = update.effective_message
         if not wrapper or not wrapper.reply_to_message:
             if wrapper:
-                await wrapper.reply_text("Usa /sanifica in risposta a un messaggio con link.", quote=True)
+                await wrapper.reply_text("Usa /sanifica in risposta a un messaggio con link.", do_quote=True)
             return
 
         target = wrapper.reply_to_message
