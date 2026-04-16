@@ -1,4 +1,5 @@
 # SanitizeLinkBot
+[![Python Tests](https://github.com/br1brown/SanitizeLinkBot/actions/workflows/pytest.yml/badge.svg)](https://github.com/br1brown/SanitizeLinkBot/actions/workflows/pytest.yml)
 
 SanitizeLinkBot è un bot Telegram che rende i link più semplici da condividere: rimuove i parametri di tracking, segue i redirect, valida il risultato e può reindirizzare a **front-end alternativi** privacy-friendly. Funziona in chat privata, nei gruppi e in modalità inline.
 
