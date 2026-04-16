@@ -35,6 +35,14 @@
     <Compile Include="sanitizelinkbot\__init__.py" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include=".dockerignore" />
+    <Content Include=".env" />
+    <Content Include=".env-example" />
+    <Content Include="chat_prefs.db" />
+    <Content Include="docker-compose.yml" />
+    <Content Include="Dockerfile" />
+    <Content Include="LICENSE" />
+    <Content Include="NOTICE" />
     <Content Include="templates\help.html" />
     <Content Include="templates\settings_group.html" />
     <Content Include="templates\settings_private.html" />
