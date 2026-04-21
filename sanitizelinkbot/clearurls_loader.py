@@ -273,8 +273,8 @@ class ClearUrlsLoader:
             logger.info("ClearURLs: regole già presenti, prossimo aggiornamento tra ~5 giorni")
             await asyncio.sleep(INTERVAL_SEC)
         else:
-            logger.info("ClearURLs: regole mancanti, primo download tra ~5 minuti")
-            await asyncio.sleep(300)
+            logger.info("ClearURLs: regole mancanti, primo download tra ~1 minuto")
+            await asyncio.sleep(60)
             
         while True:
             await self.update_from_remote(session)
