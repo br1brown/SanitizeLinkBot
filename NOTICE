@@ -13,3 +13,16 @@ This project uses the following third-party libraries:
 - certifi (Mozilla Public License 2.0)
   https://github.com/certifi/python-certifi
   License: MPL 2.0
+
+- tldextract (BSD 3-Clause)
+  https://github.com/john-kurkowski/tldextract
+  License: BSD 3-Clause
+
+- uvloop (MIT / Apache-2.0)
+  https://github.com/MagicStack/uvloop
+  License: MIT License and Apache License 2.0
+
+- ClearURLs Rules Database (LGPL-3.0)
+  https://github.com/ClearURLs/Rules
+  Used at runtime as data source for tracking parameter rules.
+  License: GNU Lesser General Public License v3.0

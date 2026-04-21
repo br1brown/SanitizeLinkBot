@@ -1,4 +1,5 @@
 python-telegram-bot>=20
 aiohttp>=3.9
 certifi
+tldextract>=5.0
 uvloop; sys_platform != "win32"

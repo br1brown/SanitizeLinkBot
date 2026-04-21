@@ -25,20 +25,27 @@
   <ItemGroup>
     <Compile Include="sanitizelinkbot\app_config.py" />
     <Compile Include="sanitizelinkbot\chat_prefs.py" />
+    <Compile Include="sanitizelinkbot\clearurls_loader.py" />
     <Compile Include="sanitizelinkbot\getter_url.py" />
     <Compile Include="sanitizelinkbot\sanitizer.py" />
     <Compile Include="sanitizelinkbot\telegram_handlers.py" />
     <Compile Include="sanitizelinkbot\telegram_io.py" />
-    <Compile Include="sanitizelinkbot\UrlTranslator.py" />
+    <Compile Include="sanitizelinkbot\url_translator.py" />
     <Compile Include="sanitizelinkbot\utils.py" />
     <Compile Include="sanitizelinkbot\__main__.py" />
     <Compile Include="sanitizelinkbot\__init__.py" />
+    <Compile Include="tests\conftest.py" />
+    <Compile Include="tests\test_clearurls_loader.py" />
+    <Compile Include="tests\test_integration.py" />
+    <Compile Include="tests\test_page_signals.py" />
+    <Compile Include="tests\test_sanitizer_unit.py" />
+    <Compile Include="tests\test_url_translator.py" />
+    <Compile Include="tests\test_utils.py" />
   </ItemGroup>
   <ItemGroup>
     <Content Include=".dockerignore" />
     <Content Include=".env" />
     <Content Include=".env-example" />
-    <Content Include="chat_prefs.db" />
     <Content Include="docker-compose.yml" />
     <Content Include="Dockerfile" />
     <Content Include="LICENSE" />
@@ -50,6 +57,13 @@
     <Content Include="README.md" />
     <Content Include="requirements.txt" />
     <Content Include="templates\start.html" />
+    <Content Include="tests\__pycache__\conftest.cpython-313-pytest-9.0.3.pyc" />
+    <Content Include="tests\__pycache__\test_clearurls_loader.cpython-313-pytest-9.0.3.pyc" />
+    <Content Include="tests\__pycache__\test_integration.cpython-313-pytest-9.0.3.pyc" />
+    <Content Include="tests\__pycache__\test_page_signals.cpython-313-pytest-9.0.3.pyc" />
+    <Content Include="tests\__pycache__\test_sanitizer_unit.cpython-313-pytest-9.0.3.pyc" />
+    <Content Include="tests\__pycache__\test_url_translator.cpython-313-pytest-9.0.3.pyc" />
+    <Content Include="tests\__pycache__\test_utils.cpython-313-pytest-9.0.3.pyc" />
     <Content Include="token.txt" />
   </ItemGroup>
   <ItemGroup>
@@ -58,6 +72,8 @@
   <ItemGroup>
     <Folder Include="sanitizelinkbot\" />
     <Folder Include="templates\" />
+    <Folder Include="tests\" />
+    <Folder Include="tests\__pycache__\" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in
