@@ -245,8 +245,10 @@ class TestApplyRedirections:
         restituire direttamente comune.roma.it.
         """
         import json
+        from sanitizelinkbot.utils import CLEARURLS_PATH
 
-        data = json.loads(open("data/clearurls.json", encoding="utf-8").read())
+        with open(CLEARURLS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
         loader = _loader_with_data(data)
 
         search_url = (

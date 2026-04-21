@@ -423,6 +423,7 @@ class TestSanitizeUrlImplFallback:
             timeout_sec=10,
             ttl_dns_cache=60,
             valida_link_post_pulizia=True,
+            urlscan_api_key=None,
             log_level="DEBUG",
         )
         san = Sanitizer(

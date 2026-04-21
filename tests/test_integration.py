@@ -24,6 +24,7 @@ def _make_sanitizer() -> Sanitizer:
         timeout_sec=20,
         ttl_dns_cache=60,
         valida_link_post_pulizia=True,
+        urlscan_api_key=None,
         log_level="INFO",
     )
     keys = load_json_file(KEYS_PATH, required=True)
