@@ -196,7 +196,7 @@ class TelegramHandlers:
             [
                 InlineKeyboardButton(
                     f"Frontend alternativo [beta] {self._flag(prefs.use_privacy_frontend)}",
-                    callback_data="toggle:translate_url",
+                    callback_data="toggle:use_privacy_frontend",
                 )
             ],
         ]

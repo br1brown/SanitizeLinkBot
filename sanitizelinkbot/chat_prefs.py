@@ -5,7 +5,6 @@ import asyncio
 import os
 import sqlite3
 from dataclasses import dataclass
-from typing import Any, Dict
 
 from .utils import PROJECT_ROOT, logger
 
@@ -13,8 +12,11 @@ _DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 os.makedirs(_DATA_DIR, exist_ok=True)
 _DB_PATH = os.path.join(_DATA_DIR, "chat_prefs.db")
 
-PREF_KEYS = frozenset({"show_title", "show_url", "translate_url", "group_auto"})
+PREF_KEYS = frozenset({"show_title", "show_url", "use_privacy_frontend", "group_auto"})
 _VALID_KEYS = PREF_KEYS
+
+# mappa nome attributo Python → nome colonna DB (solo dove divergono)
+_ATTR_TO_COL: dict[str, str] = {"use_privacy_frontend": "translate_url"}
 
 
 @dataclass
@@ -30,26 +32,18 @@ class SanitizerOpts:
 
 @dataclass
 class PrefsEntry:
-    """Preferenze memorizzate per una chat. La colonna DB si chiama 'translate_url' per retrocompatibilità."""
+    """Preferenze memorizzate per una chat."""
 
     show_title: bool
     show_url: bool
-    use_privacy_frontend: bool  # mappato dalla colonna DB "translate_url"
-    group_auto: bool  # True = modalità automatica nel gruppo (pulisce ogni link)
+    use_privacy_frontend: bool
+    group_auto: bool
 
     @classmethod
     def from_defaults(cls) -> PrefsEntry:
         return cls(
             show_title=True, show_url=True, use_privacy_frontend=False, group_auto=False
         )
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "show_title": self.show_title,
-            "show_url": self.show_url,
-            "translate_url": self.use_privacy_frontend,  # nome colonna DB invariato
-            "group_auto": self.group_auto,
-        }
 
 
 def _connect() -> sqlite3.Connection:
@@ -64,9 +58,7 @@ def _row_to_entry(row: sqlite3.Row) -> PrefsEntry:
     return PrefsEntry(
         show_title=bool(row["show_title"]),
         show_url=bool(row["show_url"]),
-        use_privacy_frontend=bool(
-            row["translate_url"]
-        ),  # colonna "translate_url" → campo rinominato
+        use_privacy_frontend=bool(row["translate_url"]),
         group_auto=bool(row["group_auto"]),
     )
 
@@ -98,12 +90,12 @@ def _get_sync(chat_id: int) -> PrefsEntry:
 
 
 def _set_sync(chat_id: int, key: str, value: bool) -> PrefsEntry:
-    val_int = int(value)  # SQLite non ha bool nativo: True/False → 1/0
+    col = _ATTR_TO_COL.get(key, key)  # traduce nome attributo → colonna DB se necessario
+    val_int = int(value)
     with _connect() as conn:
-        # Upsert atomico: inserisce con i default se la riga manca, altrimenti aggiorna solo la chiave
         conn.execute(
-            f"INSERT INTO chat_prefs (chat_id, {key}) VALUES (?, ?) "
-            f"ON CONFLICT(chat_id) DO UPDATE SET {key} = excluded.{key}",
+            f"INSERT INTO chat_prefs (chat_id, {col}) VALUES (?, ?) "
+            f"ON CONFLICT(chat_id) DO UPDATE SET {col} = excluded.{col}",
             (chat_id, val_int),
         )
         row = conn.execute(
