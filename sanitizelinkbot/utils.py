@@ -27,6 +27,10 @@ TOKEN_PATH = os.path.join(PROJECT_ROOT, "token.txt")
 # Il file viene creato al primo aggiornamento mensile; se mancante il layer ClearURLs è disabilitato
 CLEARURLS_PATH = os.path.join(PROJECT_ROOT, "data", "clearurls.json")
 
+# Lista "debounce" di Brave (redirector/bounce-tracker, complementare a ClearURLs):
+# stesso comportamento di CLEARURLS_PATH se il file manca, il layer resta disabilitato
+DEBOUNCE_PATH = os.path.join(PROJECT_ROOT, "data", "debounce.json")
+
 _LOGGER_NAME = "Sanitize-Link"
 
 

@@ -22,7 +22,20 @@ This project uses the following third-party libraries:
   https://github.com/MagicStack/uvloop
   License: MIT License and Apache License 2.0
 
+- aiodns (MIT), incluso pycares (MIT)
+  https://github.com/aio-libs/aiodns
+  License: MIT License
+
+- Brotli (MIT)
+  https://github.com/google/brotli
+  License: MIT License
+
 - ClearURLs Rules Database (LGPL-3.0)
   https://github.com/ClearURLs/Rules
   Used at runtime as data source for tracking parameter rules.
   License: GNU Lesser General Public License v3.0
+
+- Brave adblock-lists — debounce.json (MPL-2.0)
+  https://github.com/brave/adblock-lists
+  Used at runtime as a complementary data source for redirector/bounce-tracker rules.
+  License: Mozilla Public License 2.0

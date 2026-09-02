@@ -24,6 +24,8 @@ def _make_sanitizer() -> Sanitizer:
         timeout_sec=20,
         ttl_dns_cache=60,
         valida_link_post_pulizia=True,
+        max_unwrap_hops=3,
+        max_consent_hops=3,
         urlscan_api_key=None,
         log_level="INFO",
     )

@@ -77,22 +77,25 @@ class TelegramHandlers:
         opts = ChatPrefs.build_opts(chat_id)
         await self._react(message, "👀")  # feedback visivo: stiamo elaborando
 
-        cleaned = await self.sanitizer.sanitize_batch(opts, detected)
+        try:
+            cleaned = await self.sanitizer.sanitize_batch(opts, detected)
 
-        # Import locale per evitare import circolare: telegram_handlers → utils → (potenzialmente) altri moduli
-        from .utils import urls_are_semantically_equivalent
+            # Import locale per evitare import circolare: telegram_handlers → utils → (potenzialmente) altri moduli
+            from .utils import urls_are_semantically_equivalent
 
-        is_unchanged = len(cleaned) == len(detected) and all(
-            urls_are_semantically_equivalent(cleaned_item[0], original)
-            for cleaned_item, original in zip(cleaned, detected)
-        )
-        if is_unchanged:
-            # Link già pulito: reaction silenziosa, nessun messaggio in chat (meno rumore nel gruppo)
-            await self._react(message, "👍")
-        else:
-            reply = await self._send_cleaned_reply(message, cleaned, opts)
-            await self._react(message, None)  # rimuove 👀 dopo aver inviato la risposta
-            logger.info("GRUPPO: puliti=%d reply_id=%s", len(cleaned), reply.message_id)
+            is_unchanged = len(cleaned) == len(detected) and all(
+                urls_are_semantically_equivalent(cleaned_item[0], original)
+                for cleaned_item, original in zip(cleaned, detected)
+            )
+            if is_unchanged:
+                await self._react(message, "👨‍💻")  # reaction tecnica, nessun messaggio in chat
+            else:
+                reply = await self._send_cleaned_reply(message, cleaned, opts)
+                await self._react(message, None)  # rimuove 👀 dopo aver inviato la risposta
+                logger.info("GRUPPO: puliti=%d reply_id=%s", len(cleaned), reply.message_id)
+        except Exception:
+            logger.exception("GRUPPO: errore durante l'elaborazione del messaggio")
+            await self._react(message, "❌", "👎", None)  # segnala l'errore invece di restare in silenzio
 
     async def handle_private(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -111,11 +114,15 @@ class TelegramHandlers:
             await self._react(message, "❌", "👎", None)
             return
 
-        opts = ChatPrefs.build_opts(message.chat.id)
-        cleaned = await self.sanitizer.sanitize_batch(opts, detected)
-        reply = await self._send_cleaned_reply(message, cleaned, opts)
-        await self._react(message, None)
-        logger.info("PRIVATA: puliti=%d reply_id=%s", len(cleaned), reply.message_id)
+        try:
+            opts = ChatPrefs.build_opts(message.chat.id)
+            cleaned = await self.sanitizer.sanitize_batch(opts, detected)
+            reply = await self._send_cleaned_reply(message, cleaned, opts)
+            await self._react(message, None)
+            logger.info("PRIVATA: puliti=%d reply_id=%s", len(cleaned), reply.message_id)
+        except Exception:
+            logger.exception("PRIVATA: errore durante l'elaborazione del messaggio")
+            await self._react(message, "❌", "👎", None)
 
     async def cmd_sanifica(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -137,10 +144,14 @@ class TelegramHandlers:
             await self._react(target, "❌", "👎", None)
             return
 
-        opts = ChatPrefs.build_opts(wrapper.chat.id)
-        cleaned = await self.sanitizer.sanitize_batch(opts, detected)
-        await self._send_cleaned_reply(target, cleaned, opts)
-        await self._react(target, None)
+        try:
+            opts = ChatPrefs.build_opts(wrapper.chat.id)
+            cleaned = await self.sanitizer.sanitize_batch(opts, detected)
+            await self._send_cleaned_reply(target, cleaned, opts)
+            await self._react(target, None)
+        except Exception:
+            logger.exception("SANIFICA: errore durante l'elaborazione del messaggio")
+            await self._react(target, "❌", "👎", None)
 
     async def handle_inline(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE

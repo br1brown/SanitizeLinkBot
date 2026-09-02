@@ -6,6 +6,7 @@ Incolla uno o più link: rispondo con le versioni pulite
 <b>Nei gruppi</b>
 - Rispondi a un messaggio con <code>/sanifica</code>: pulisco i link di quel messaggio
 - Oppure attiva <b>Modalità automatica</b> in <code>/settings</code>: elaboro automaticamente ogni messaggio con link
+- Reaction in modalità automatica: 👀 sto elaborando, 👨‍💻 link già pulito (nessuna azione necessaria, non è un giudizio sul contenuto), ❌ errore
 
 <b>Ricerca inline</b>
 Scrivi <code>{mention_bot}</code> nella barra di testo di Telegram e incolla un link:
@@ -21,8 +22,8 @@ Apri <code>/settings</code> e usa i pulsanti:
 Le impostazioni valgono solo per <u>questa chat</u> (privata o gruppo)
 
 <b>Cosa faccio esattamente</b>
-- Rimuovo i parametri di tracking usando le regole <a href="https://clearurls.xyz">ClearURLs</a> (Amazon, YouTube, Google, ecc.) e il file <code>keys.json</code> locale
-- Seguo i redirect fino alla destinazione finale
+- Rimuovo i parametri di tracking usando le regole <a href="https://clearurls.xyz">ClearURLs</a> e <a href="https://github.com/brave/adblock-lists">Debounce</a> (Amazon, YouTube, Google, link di affiliazione, ecc.) e il file <code>keys.json</code> locale
+- Seguo i redirect fino alla destinazione finale, incluse le pagine di consenso cookie (es. Google)
 - Verifico che il link pulito sia raggiungibile prima di inviarlo
 
 <b>Dettagli utili</b>

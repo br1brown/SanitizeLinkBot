@@ -3,3 +3,9 @@ aiohttp>=3.9
 certifi
 tldextract>=5.0
 uvloop; sys_platform != "win32"
+# Resolver DNS asincrono (c-ares) per il TCPConnector: aiohttp lo usa se presente,
+# altrimenti ricade sul resolver di default. Vedi sanitizer.py:_build_resolver
+aiodns>=3.0
+# Abilita la compressione Brotli nelle risposte HTTP (in aggiunta a gzip/deflate):
+# aiohttp la negozia automaticamente se il pacchetto è importabile, nessun codice richiesto
+Brotli>=1.1

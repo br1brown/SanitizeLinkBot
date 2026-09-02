@@ -194,14 +194,14 @@ class TestExtractConsentContinue:
     def test_consent_google_extracts_continue(self):
         from sanitizelinkbot.sanitizer import _extract_consent_continue
 
-        # Il valore di continue= è URL-encoded nella query string; parse_qsl lo decodifica
+        # Il valore di continue= è URL-encoded nella query string; unquote() lo decodifica
         url = (
             "https://consent.google.com/m"
             "?continue=https://maps.google.com/maps%3Fq%3D44.6,10.2"
             "&gl=IT&hl=it"
         )
         result = _extract_consent_continue(url)
-        # parse_qsl decodifica %3F → ? e %3D → =
+        # unquote() decodifica %3F → ? e %3D → =
         assert result == "https://maps.google.com/maps?q=44.6,10.2"
 
     def test_non_consent_domain_returns_none(self):
@@ -221,6 +221,27 @@ class TestExtractConsentContinue:
 
         url = "https://consent.google.com/m?continue=javascript:alert(1)"
         assert _extract_consent_continue(url) is None
+
+    def test_continue_preserves_literal_plus(self):
+        """Un '+' letterale nell'URL di destinazione (comune nei link Google Foto/Drive/Maps) non deve diventare uno spazio."""
+        from sanitizelinkbot.sanitizer import _extract_consent_continue
+
+        url = (
+            "https://consent.google.com/m"
+            "?continue=https://photos.google.com/share/AF1QipN+abc/def%3Fkey%3Dxyz+123"
+            "&gl=IT&hl=it"
+        )
+        result = _extract_consent_continue(url)
+        assert result == "https://photos.google.com/share/AF1QipN+abc/def?key=xyz+123"
+
+    def test_consent_youtube_domain_supported(self):
+        """consent.youtube.com usa lo stesso meccanismo di consent.google.com."""
+        from sanitizelinkbot.sanitizer import _extract_consent_continue
+
+        url = "https://consent.youtube.com/d?continue=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabc123&gl=IT"
+        assert (
+            _extract_consent_continue(url) == "https://www.youtube.com/watch?v=abc123"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +444,8 @@ class TestSanitizeUrlImplFallback:
             timeout_sec=10,
             ttl_dns_cache=60,
             valida_link_post_pulizia=True,
+            max_unwrap_hops=3,
+            max_consent_hops=3,
             urlscan_api_key=None,
             log_level="DEBUG",
         )

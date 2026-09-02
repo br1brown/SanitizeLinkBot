@@ -31,6 +31,7 @@ ENV/
 .env.*.local
 token.txt
 chat_prefs.db
+data/
 
 # Docker
 docker-compose*.yml

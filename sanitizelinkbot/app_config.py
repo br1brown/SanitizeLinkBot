@@ -54,6 +54,8 @@ class AppConfig:
     valida_link_post_pulizia: (
         bool  # se True, verifica che l'URL pulito punti alla stessa pagina
     )
+    max_unwrap_hops: int  # hop massimi nello smontaggio dei link wrapper (ClearURLs + Debounce)
+    max_consent_hops: int  # hop massimi nel seguire interstitial di consenso incatenati
     urlscan_api_key: str | None  # Chiave API per urlscan.io (opzionale)
     log_level: str | None
 
@@ -69,6 +71,8 @@ class AppConfig:
             timeout_sec=_get_int("HTTP_TIMEOUT_SEC", 30),
             ttl_dns_cache=_get_int("HTTP_TTL_DNS_CACHE", 60),
             valida_link_post_pulizia=_get_bool("HTTP_VALIDA_LINK_POST_PULIZIA", True),
+            max_unwrap_hops=_get_int("MAX_UNWRAP_HOPS", 3),
+            max_consent_hops=_get_int("MAX_CONSENT_HOPS", 3),
             urlscan_api_key=os.getenv("URLSCAN_API_KEY"),
             log_level=_normalize_log_level(os.getenv("LOG_LEVEL", "INFO")),
         )
@@ -81,6 +85,7 @@ class AppConfig:
             f"AppConfig(max_concurrency={self.max_concurrency}, cache_max_size={self.cache_max_size}, "
             f"connections_per_host={self.connections_per_host}, max_redirects={self.max_redirects}, "
             f"timeout_sec={self.timeout_sec}, ttl_dns_cache={self.ttl_dns_cache}, "
-            f"valida_link_post_pulizia={self.valida_link_post_pulizia}, urlscan_api_key={'***' if self.urlscan_api_key else None}, "
+            f"valida_link_post_pulizia={self.valida_link_post_pulizia}, max_unwrap_hops={self.max_unwrap_hops}, "
+            f"max_consent_hops={self.max_consent_hops}, urlscan_api_key={'***' if self.urlscan_api_key else None}, "
             f"log_level={self.log_level})"
         )

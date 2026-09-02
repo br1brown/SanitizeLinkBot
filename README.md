@@ -7,19 +7,23 @@ Rimuove automaticamente i parametri di tracciamento, segue i redirect, valida i 
 
 Funziona in chat private, gruppi e modalità inline.
 
+> Novità e modifiche rilevanti (incluse le note di migrazione Docker): vedi [CHANGELOG.md](CHANGELOG.md).
+
 
 ## 🚀 Caratteristiche principali
 
 ### Pulizia e sicurezza
 
 * Rimozione automatica dei parametri di tracking (`utm_*`, `fbclid`, `gclid`, ecc.)
-* Supporto a regole avanzate per dominio tramite database **ClearURLs**
-* Estrazione dell’URL reale da link wrapper (es. `l.facebook.com`)
+* Supporto a regole avanzate per dominio tramite database **ClearURLs** e **Debounce** (Brave)
+* Estrazione dell’URL reale da link wrapper (es. `l.facebook.com`, link di affiliazione, pagine AMP)
 * Validazione del link finale per garantire coerenza con l’originale
 
 ### Gestione avanzata dei link
 
 * Follow automatico dei redirect (HTTP, meta refresh, alcuni JS)
+* Gestione delle pagine di consenso cookie (es. Google) fino alla destinazione reale
+* Retry automatico sui blip di rete transitori durante l'elaborazione
 * Estrazione intelligente dai messaggi Telegram (testo, caption, entità cliccabili)
 * Elaborazione batch con concorrenza e deduplicazione
 * Cache LRU configurabile per migliorare le performance
@@ -55,8 +59,10 @@ Invia uno o più link: il bot risponderà con le versioni pulite o confermerà c
 
 Comportamento in modalità automatica:
 
-* 👍 se il link è già pulito
+* 👀 mentre elabora il messaggio
+* 👨‍💻 se il link è già pulito (reaction "tecnica", non un giudizio sul contenuto — nessun messaggio in chat)
 * Risposta con link modificato se necessario
+* ❌ in caso di errore durante l'elaborazione
 * Nessun messaggio per contenuti senza link
 
 ### Modalità inline
@@ -113,6 +119,8 @@ python -m sanitizelinkbot
 ```
 
 > Su Linux/macOS viene usato automaticamente `uvloop` per migliori performance. Su Windows si usa l'event loop standard di asyncio.
+>
+> `aiodns` (resolver DNS asincrono) e `Brotli` (compressione HTTP aggiuntiva) sono usati automaticamente se installati — se mancano o non sono compatibili con la piattaforma, il bot funziona comunque con le alternative di default.
 
 
 ## 🐳 Installazione con Docker (consigliata)
@@ -150,6 +158,13 @@ Può essere fornito tramite:
 * Aggiornamento periodico automatico
 * Funziona anche senza (modalità fallback)
 
+### Debounce (Brave)
+
+* Lista di redirector/bounce-tracker mantenuta da Brave, complementare a ClearURLs
+  (copre ad es. lo smontaggio delle pagine AMP di Google)
+* Stesso comportamento di ClearURLs: download automatico, aggiornamento periodico,
+  funziona anche senza
+
 ### keys.json
 
 Definisce le regole di pulizia:
@@ -179,6 +194,8 @@ Definisce le regole di pulizia:
 | HTTP_CONNECTIONS_PER_HOST     | 10      | Connessioni simultanee       |
 | HTTP_TTL_DNS_CACHE            | 60      | Cache DNS                    |
 | HTTP_VALIDA_LINK_POST_PULIZIA | true    | Validazione link             |
+| MAX_UNWRAP_HOPS                | 3       | Hop massimi smontaggio link wrapper (ClearURLs + Debounce) |
+| MAX_CONSENT_HOPS               | 3       | Hop massimi interstitial di consenso incatenati |
 | LOG_LEVEL                     | INFO    | Livello log                  |
 
 
@@ -213,6 +230,7 @@ sanitizelinkbot/
 ├── app_config.py        # configurazione da variabili d'ambiente
 ├── chat_prefs.py        # preferenze per chat (persistenza su file)
 ├── clearurls_loader.py  # download e aggiornamento del database ClearURLs
+├── debounce_loader.py   # download e aggiornamento della lista Debounce (Brave)
 ├── getter_url.py        # fetch HTTP, redirect, estrazione titolo
 ├── sanitizer.py         # pipeline principale di pulizia
 ├── telegram_handlers.py # handler dei comandi e messaggi Telegram
@@ -221,7 +239,7 @@ sanitizelinkbot/
 ├── urlscan_client.py    # client per le API urlscan.io
 └── utils.py             # utilità condivise (logger, render template, …)
 
-data/                    # cache del database ClearURLs (generata automaticamente)
+data/                    # cache di ClearURLs e Debounce (generata automaticamente)
 templates/               # template HTML per i messaggi del bot
 tests/
 ```
@@ -250,6 +268,9 @@ Il codice di questo progetto è distribuito sotto licenza **MIT**.
 | [certifi](https://github.com/certifi/python-certifi) | MPL-2.0 |
 | [tldextract](https://github.com/john-kurkowski/tldextract) | BSD-3-Clause |
 | [uvloop](https://github.com/MagicStack/uvloop) | MIT / Apache-2.0 |
+| [aiodns](https://github.com/aio-libs/aiodns) | MIT |
+| [Brotli](https://github.com/google/brotli) | MIT |
 | [ClearURLs Rules DB](https://github.com/ClearURLs/Rules) | LGPL-3.0 |
+| [Brave adblock-lists (debounce.json)](https://github.com/brave/adblock-lists) | MPL-2.0 |
 
 Per i dettagli vedere il file [NOTICE](NOTICE).

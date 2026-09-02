@@ -13,6 +13,7 @@ if __name__ == "__main__" and not __package__:
 from .sanitizer import Sanitizer
 from .telegram_handlers import TelegramHandlers
 from .clearurls_loader import ClearUrlsLoader
+from .debounce_loader import DebounceLoader
 from .utils import (
     logger,
     set_log_level,
@@ -20,6 +21,7 @@ from .utils import (
     load_json_file,
     KEYS_PATH,
     CLEARURLS_PATH,
+    DEBOUNCE_PATH,
     PROJECT_ROOT,
 )
 from . import app_config
@@ -67,6 +69,7 @@ def _load_env_file() -> None:
 _load_env_file()
 
 CONFIG = app_config.AppConfig.load()
+set_log_level(CONFIG.log_level)  # prima di qualsiasi altro log: i loader sotto sono sincroni
 KEYS = load_json_file(KEYS_PATH)
 
 # ClearURLs: caricamento sincrono all'avvio (il loop asyncio non è ancora attivo).
@@ -74,6 +77,10 @@ KEYS = load_json_file(KEYS_PATH)
 # Il file viene scaricato dal task monthly_updater al primo giro (~5 minuti dopo l'avvio).
 _clearurls_loader = ClearUrlsLoader(Path(CLEARURLS_PATH))
 _clearurls_loader.load_sync()
+
+# Debounce (Brave): stesso schema di caricamento di ClearURLs, layer complementare
+_debounce_loader = DebounceLoader(Path(DEBOUNCE_PATH))
+_debounce_loader.load_sync()
 
 
 async def main() -> None:
@@ -98,6 +105,7 @@ async def main() -> None:
         domain_whitelist=KEYS.get("DOMAIN_WHITELIST", []),
         conf=CONFIG,
         clearurls=_clearurls_loader,
+        debounce=_debounce_loader,
     )
     handlers = TelegramHandlers(sanitizer)
 
@@ -133,7 +141,6 @@ async def main() -> None:
         group=1,
     )
 
-    set_log_level(CONFIG.log_level)
     logger.info("Il bot è configurato e in esecuzione")
 
     await application.initialize()
@@ -147,6 +154,12 @@ async def main() -> None:
         name="clearurls-periodic-updater",
     )
     logger.info("Aggiornamento periodico di ClearURLs configurato (ciclo di 5 giorni)")
+
+    _debounce_update_task = asyncio.create_task(
+        _debounce_loader.run_periodic_updater(_http_session),
+        name="debounce-periodic-updater",
+    )
+    logger.info("Aggiornamento periodico di Debounce configurato (ciclo di 5 giorni)")
 
     # Verifica le impostazioni BotFather necessarie per il funzionamento corretto
     me = await application.bot.get_me()
@@ -189,12 +202,14 @@ async def main() -> None:
         # await su un Event mai settato: modo idiomatico per tenere vivo il loop asyncio
         await asyncio.Event().wait()
     finally:
-        # Cancella il task ClearURLs prima di chiudere la sessione HTTP che usa
+        # Cancella i task di aggiornamento prima di chiudere la sessione HTTP che usano
         _clearurls_update_task.cancel()
-        try:
-            await _clearurls_update_task
-        except asyncio.CancelledError:
-            pass
+        _debounce_update_task.cancel()
+        for _update_task in (_clearurls_update_task, _debounce_update_task):
+            try:
+                await _update_task
+            except asyncio.CancelledError:
+                pass
         await application.updater.stop()
         await application.stop()
         await application.shutdown()

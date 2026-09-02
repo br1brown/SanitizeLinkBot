@@ -6,6 +6,7 @@ from __future__ import annotations
 from .url_translator import UrlTranslator
 from .chat_prefs import SanitizerOpts
 from .clearurls_loader import ClearUrlsLoader
+from .debounce_loader import DebounceLoader
 from .utils import logger
 from .urlscan_client import UrlScanClient
 from collections import OrderedDict
@@ -22,6 +23,7 @@ from urllib.parse import (
     urljoin,
     urlparse,
     urlunparse,
+    unquote,
 )
 import hashlib
 from dataclasses import dataclass
@@ -92,25 +94,35 @@ _RE_ZERO_WIDTH = re.compile(r"[\u200B-\u200D\uFEFF]")
 _CONSENT_DOMAINS = frozenset(
     {
         "consent.google.com",  # pagina consenso cookie Google (EU/GDPR)
+        "consent.youtube.com",  # stesso meccanismo, dominio separato per i link YouTube
     }
 )
 
 
-def _extract_consent_continue(url: str) -> str | None:
-    """Se l'URL è una pagina di consenso nota, restituisce l'URL reale dal parametro continue=.
+def _build_dns_resolver() -> "aiohttp.abc.AbstractResolver | None":
+    """Resolver DNS per il TCPConnector: aiodns se disponibile, altrimenti None (default aiohttp)."""
+    try:
+        return aiohttp.AsyncResolver()  # resolver asincrono via c-ares, nessun thread pool
+    except (RuntimeError, OSError):
+        logger.debug(
+            "aiodns non disponibile: uso il resolver DNS di default di aiohttp"
+        )
+        return None
 
-    Restituisce None se l'URL non è un interstitial di consenso, così il chiamante
-    può trattare None come "nessuna azione richiesta".
-    """
+
+def _extract_consent_continue(url: str) -> str | None:
+    """Restituisce l'URL reale dal parametro continue= di una pagina di consenso nota, o None."""
     try:
         parts = urlsplit(url)
         if parts.netloc.lower() not in _CONSENT_DOMAINS:
             return None
-        for param_key, param_val in parse_qsl(parts.query):
-            if param_key == "continue" and param_val.startswith(
-                ("http://", "https://")
-            ):
-                return param_val
+        for raw_param in parts.query.split("&"):
+            param_key, _, param_val = raw_param.partition("=")
+            if param_key != "continue" or not param_val:
+                continue
+            candidate = unquote(param_val)  # preserva ogni "+" letterale nell'URL estratto
+            if candidate.startswith(("http://", "https://")):
+                return candidate
     except Exception:
         pass
     return None
@@ -296,7 +308,11 @@ class PageSignals:
 
     @staticmethod
     async def _fetch_signals(
-        url: str, sanita: "Sanitizer", opts: SanitizerOpts, _depth: int = 0
+        url: str,
+        sanita: "Sanitizer",
+        opts: SanitizerOpts,
+        _depth: int = 0,
+        _retry_left: int = 1,
     ) -> "PageSignals | None":
         """Richiesta HTTP leggera che raccoglie i segnali della pagina.
 
@@ -304,6 +320,7 @@ class PageSignals:
         scaricare l'intera pagina — canonical, titolo e meta-refresh sono tutti
         nella <head>. I redirect HTTP 3xx sono già seguiti da aiohttp in automatico.
         _depth è interno: conta gli hop da meta-refresh, massimo 1 per evitare loop.
+        _retry_left è interno: numero di retry residui sugli errori di rete transitori.
         """
         MAX_BYTES = 512 * 1024  # oltre 512KB non scarichiamo (PDF, video, ecc.)
 
@@ -336,8 +353,15 @@ class PageSignals:
 
         try:
             session = await sanita._get_session()
+            # ClientTimeout per-richiesta: quello della sessione non si applica alle singole get()
+            request_timeout = aiohttp.ClientTimeout(
+                total=sanita.conf.timeout_sec, connect=sanita.conf.timeout_sec / 3
+            )
             async with session.get(
-                url, headers=headers, timeout=sanita.conf.timeout_sec
+                url,
+                headers=headers,
+                timeout=request_timeout,
+                max_redirects=sanita.conf.max_redirects,
             ) as resp:
 
                 raw_cl = resp.headers.get("Content-Length")
@@ -479,10 +503,28 @@ class PageSignals:
                     ),
                 )
 
-        except Exception:
-            return (
-                None  # errore di rete (timeout, SSL, DNS): il chiamante usa il fallback
-            )
+        except (
+            aiohttp.ClientConnectorError,  # connessione rifiutata/host irraggiungibile
+            aiohttp.ServerDisconnectedError,  # il server ha chiuso la connessione a metà
+            aiohttp.ClientOSError,  # errore socket a basso livello (es. reset)
+            asyncio.TimeoutError,  # timeout di connessione o lettura
+        ) as error:
+            if _retry_left > 0:
+                logger.debug(
+                    "Errore di rete transitorio (%s) durante il fetch dei segnali — riprovo tra 0.5s",
+                    type(error).__name__,
+                )
+                await asyncio.sleep(0.5)
+                return await PageSignals._fetch_signals(
+                    url, sanita, opts, _depth=_depth, _retry_left=_retry_left - 1
+                )
+            return None
+        except Exception as exc:
+            if isinstance(exc, aiohttp.ClientError):
+                logger.debug("Errore nel fetch dei segnali: %s", type(exc).__name__)  # solo il tipo: il messaggio può contenere l'URL
+            else:
+                logger.debug("Errore imprevisto nel fetch dei segnali: %s", exc)  # bug di programmazione, nessun URL nel messaggio
+            return None  # il chiamante usa il fallback
 
 
 class Sanitizer:
@@ -500,6 +542,9 @@ class Sanitizer:
         clearurls: (
             ClearUrlsLoader | None
         ) = None,  # se None il bot funziona con solo keys.json
+        debounce: (
+            DebounceLoader | None
+        ) = None,  # se None niente layer aggiuntivo di unwrap, solo ClearURLs
     ) -> None:
 
         logger.debug(
@@ -522,6 +567,7 @@ class Sanitizer:
         self._clearurls = (
             clearurls  # nessun lock necessario: il loader usa swap atomico internamente
         )
+        self._debounce = debounce  # stesso discorso: swap atomico internamente
 
         # Sessione e SSL context creati lazy al primo uso: in __init__ il loop asyncio
         # potrebbe non essere ancora attivo (python-telegram-bot lo gestisce internamente)
@@ -565,6 +611,7 @@ class Sanitizer:
                 ),
                 ssl=self._ssl_ctx,
                 ttl_dns_cache=self.conf.ttl_dns_cache,
+                resolver=_build_dns_resolver(),
             )
             self._session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(
@@ -599,13 +646,30 @@ class Sanitizer:
 
     def _unwrap_link_wrapper(self, url: str) -> str:
         """Estrae l'URL vero da link wrapper (es. l.facebook.com?u=...) senza richieste HTTP.
-        ClearURLs conosce questi pattern e li risolve direttamente — più veloce e senza
-        lasciare tracce nei log del server wrapper.
+        Combina ClearURLs e la lista Debounce di Brave, in ciclo: l'output di una fonte
+        può essere a sua volta un wrapper per l'altra.
         """
+        current_url = url
+        for _ in range(self.conf.max_unwrap_hops):
+            next_url = self._unwrap_via_clearurls(current_url)
+            if next_url == current_url:
+                next_url = self._unwrap_via_debounce(current_url)
+            if next_url == current_url:
+                break
+            current_url = next_url
+        return current_url
+
+    def _unwrap_via_clearurls(self, url: str) -> str:
         if self._clearurls is None or not self._clearurls.is_loaded:
             return url
         providers = self._clearurls.find_providers(url)
         extracted = self._clearurls.apply_redirections(url, providers)
+        return extracted if extracted else url
+
+    def _unwrap_via_debounce(self, url: str) -> str:
+        if self._debounce is None or not self._debounce.is_loaded:
+            return url
+        extracted = self._debounce.extract_target(url)
         return extracted if extracted else url
 
     def _clean_with_clearurls(self, url: str) -> str:
@@ -751,26 +815,26 @@ class Sanitizer:
             final_title = None
             post_redirect_url = _input_url
 
-        # Interstitial di consenso GDPR (es. consent.google.com): aiohttp si ferma
-        # sulla pagina di consenso anziché seguire il redirect verso la destinazione reale.
-        # Estraiamo l'URL reale dal parametro continue= e ri-seguiamo il redirect per
-        # ottenere segnali corretti e poter pulire la URL di destinazione.
-        consent_target = _extract_consent_continue(post_redirect_url)
-        if consent_target:
+        # Segue gli interstitial di consenso (es. consent.google.com) in ciclo: possono incatenarsene più di uno.
+        for _hop in range(self.conf.max_consent_hops):
+            consent_target = _extract_consent_continue(post_redirect_url)
+            if not consent_target:
+                break
             logger.debug(
                 "Interstitial di consenso rilevato su %s — ri-seguo per la destinazione",
                 urlsplit(post_redirect_url).netloc,
             )
             try:
                 signals_real = await self.do_redirect(consent_target, opts)
-                if signals_real:
-                    signals_post_redirect = signals_real
-                    final_title = signals_real.title
-                    post_redirect_url = signals_real.final_url
             except Exception:
-                post_redirect_url = (
-                    consent_target  # fallback: usiamo l'URL estratto senza segnali
-                )
+                signals_real = None
+            if signals_real:
+                signals_post_redirect = signals_real
+                final_title = signals_real.title
+                post_redirect_url = signals_real.final_url
+            else:
+                post_redirect_url = consent_target  # nessun segnale, ma un URL funzionante
+                break
 
         # I fragment non vengono mai inviati al server HTTP: aiohttp li rimuove prima della
         # richiesta. Se il redirect non ha cambiato host+path (stesso documento), ripristiniamo
