@@ -49,10 +49,17 @@ class GetterUrl:
         result: list[str] = []
         if not text or not entities:
             return result
+        # offset/length dell'entità sono in unità UTF-16 (standard Telegram), non in code point
+        # Python: un carattere fuori dal BMP (es. molte emoji) occupa 2 unità UTF-16 ma 1 solo
+        # indice Python, quindi uno slice diretto su "text" si sfasa di una posizione per ogni
+        # emoji che precede l'entità. Passiamo perciò da una codifica UTF-16-LE intermedia.
+        encoded_text = text.encode("utf-16-le")
         for entity in entities:
             if entity.type == MessageEntity.URL:
-                # Usiamo offset+length dell'entità per estrarre l'URL esatto dal testo
-                result.append(text[entity.offset : entity.offset + entity.length])
+                entity_bytes = encoded_text[
+                    entity.offset * 2 : (entity.offset + entity.length) * 2
+                ]
+                result.append(entity_bytes.decode("utf-16-le"))
             elif entity.type == MessageEntity.TEXT_LINK and entity.url:
                 result.append(
                     entity.url

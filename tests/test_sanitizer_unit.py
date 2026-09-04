@@ -512,3 +512,11 @@ class TestSanitizeUrlImplFallback:
         assert (
             "t" not in exact
         ), "La chiave 't' è in EXACT_KEYS: verrebbe rimosso il timestamp YouTube (?t=120)"
+
+    def test_instagram_igsi_removed(self):
+        """keys.json deve contenere 'igsi': parametro di tracking Instagram come igsh/igshid."""
+        from sanitizelinkbot.utils import load_json_file, KEYS_PATH
+
+        keys = load_json_file(KEYS_PATH, required=True)
+        exact = [k.lower() for k in keys.get("EXACT_KEYS", [])]
+        assert "igsi" in exact, "La chiave 'igsi' manca da EXACT_KEYS: il parametro di share Instagram non viene rimosso"
