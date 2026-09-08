@@ -15,6 +15,7 @@ from email.message import Message as _EmailMessage
 import re
 import html
 import asyncio
+import time
 from urllib.parse import (
     urlsplit,
     urlunsplit,
@@ -583,6 +584,16 @@ class Sanitizer:
         # Semaforo: senza limite un batch di 50 URL lancerebbe 50 richieste simultanee
         self._semaforo = asyncio.Semaphore(conf.max_concurrency)
 
+        # Cache adattiva "dominio -> ultimo fallimento noto dello strip aggressivo":
+        # se su youtube.com/google.com abbiamo già visto che rimuovere l'intera query
+        # rompe la pagina (es. "v=", "q="), evitiamo di rifare la stessa richiesta HTTP
+        # inutile per ogni singolo link dello stesso dominio. Non è una lista scritta a
+        # mano (tornerebbe al problema originale): si costruisce da sola osservando gli
+        # esiti reali della validazione, e scade dopo un po' nel caso un sito cambi.
+        self._aggressive_unsafe_domains: OrderedDict[str, float] = OrderedDict()
+        self._aggressive_unsafe_maxlen = 500
+        self._aggressive_unsafe_ttl_sec = 6 * 3600
+
         self.TRADUCI_URL = UrlTranslator()
         self.urlscan: UrlScanClient | None = None
 
@@ -739,6 +750,46 @@ class Sanitizer:
         except Exception:
             return url  # URL malformato: restituiamo intatto
 
+    def _strip_all_query(self, url: str) -> str:
+        """Rimuove l'INTERA query string, indipendentemente dai nomi dei parametri.
+
+        Complementa _strip_tracking_params (che rimuove solo chiavi note): cattura anche
+        tracker mai visti prima e assenti da keys.json/ClearURLs (es. Instagram "stkn" —
+        un nuovo parametro di share scoperto dopo che "igsh"/"igshid" erano già in lista).
+        Da sola sarebbe pericolosa (romperebbe siti come YouTube dove "v=" è il contenuto,
+        non un tracker): il chiamante la usa solo come candidato da validare con PageSignals
+        prima di restituirla, mai direttamente.
+        """
+        try:
+            parts = urlsplit(url)
+            if not parts.query:
+                return url
+            return urlunsplit((parts.scheme, parts.netloc, parts.path, "", parts.fragment))
+        except Exception:
+            return url
+
+    def _is_aggressive_strip_known_unsafe(self, domain: str) -> bool:
+        """True se su questo dominio lo strip aggressivo ha già fallito la validazione di recente.
+
+        Non impedisce mai la pulizia: serve solo a evitare una richiesta HTTP che sappiamo
+        già inutile (es. youtube.com, dove "v=" è il contenuto). Scade dopo _aggressive_unsafe_ttl_sec
+        così un sito che cambia comportamento viene ritestato periodicamente.
+        """
+        last_fail = self._aggressive_unsafe_domains.get(domain)
+        if last_fail is None:
+            return False
+        if time.monotonic() - last_fail > self._aggressive_unsafe_ttl_sec:
+            del self._aggressive_unsafe_domains[domain]
+            return False
+        return True
+
+    def _mark_aggressive_strip_unsafe(self, domain: str) -> None:
+        """Registra che lo strip aggressivo ha rotto la pagina su questo dominio."""
+        self._aggressive_unsafe_domains.pop(domain, None)  # rimuovi per reinserire in coda (MRU)
+        self._aggressive_unsafe_domains[domain] = time.monotonic()
+        while len(self._aggressive_unsafe_domains) > self._aggressive_unsafe_maxlen:
+            self._aggressive_unsafe_domains.popitem(last=False)
+
     async def do_redirect(
         self, url_iniziale: str, opts: SanitizerOpts
     ) -> "PageSignals | None":
@@ -870,6 +921,46 @@ class Sanitizer:
             # URL originale non raggiungibile: non abbiamo segnali con cui confrontare
             if signals_post_redirect and not signals_post_redirect.is_url_ok():
                 return _with_privacy(post_redirect_url), final_title
+
+            # Tentativo aggressivo: rimuove QUALSIASI parametro residuo, anche tracker mai
+            # visti prima (assenti da keys.json/ClearURLs — è la classe di bug di "stkn" su
+            # Instagram: un provider aggiunge un nuovo parametro di share prima che qualcuno
+            # lo scopra e lo aggiunga alla lista). Va tentato PRIMA della pulizia standard
+            # perché è un sur-insieme di rimozione; se anche qui i segnali FORTI (non il solo
+            # path, per cui vedi equivalent_to) confermano la stessa pagina, lo usiamo.
+            # Se rompe il sito (es. YouTube "v=", Google "q="), la validazione lo scarta e si
+            # ripiega sulla pulizia standard sottostante, intrinsecamente più sicura perché
+            # tocca solo chiavi già note per non alterare il contenuto.
+            if self.conf.aggressive_query_strip and not self._is_aggressive_strip_known_unsafe(
+                domain_no_www
+            ):
+                aggressive_url = self._strip_all_query(cleaned_url)
+                if aggressive_url != cleaned_url:
+                    try:
+                        signals_aggressive = await PageSignals._fetch_signals(
+                            aggressive_url, self, opts
+                        )
+                    except Exception:
+                        signals_aggressive = None
+                    if (
+                        signals_aggressive
+                        and signals_post_redirect
+                        and signals_aggressive.is_url_ok()
+                        # check_url=False: qui il solo path non basta come prova, perché
+                        # abbiamo appena rimosso parametri di cui non conosciamo il ruolo
+                        and signals_aggressive.equivalent_to(
+                            signals_post_redirect, False
+                        )
+                    ):
+                        if signals_aggressive.title:
+                            final_title = signals_aggressive.title
+                        return _with_privacy(aggressive_url), final_title
+                    # Registriamo il dominio come "non sicuro" solo se abbiamo una risposta
+                    # valida che chiaramente non corrisponde (non per un errore di rete
+                    # transitorio: signals_aggressive None non prova che il dominio rompa
+                    # la pulizia, prova solo che questa richiesta è fallita)
+                    if signals_aggressive and signals_aggressive.is_url_ok():
+                        self._mark_aggressive_strip_unsafe(domain_no_www)
 
             # La pulizia non ha cambiato nulla: evitiamo una richiesta HTTP inutile
             if cleaned_url == post_redirect_url:

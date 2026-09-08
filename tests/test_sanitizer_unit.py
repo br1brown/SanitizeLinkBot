@@ -520,3 +520,167 @@ class TestSanitizeUrlImplFallback:
         keys = load_json_file(KEYS_PATH, required=True)
         exact = [k.lower() for k in keys.get("EXACT_KEYS", [])]
         assert "igsi" in exact, "La chiave 'igsi' manca da EXACT_KEYS: il parametro di share Instagram non viene rimosso"
+
+    def test_instagram_stkn_removed(self):
+        """keys.json deve contenere 'stkn': token di share Instagram sui link /reel/, non coperto da ClearURLs."""
+        from sanitizelinkbot.utils import load_json_file, KEYS_PATH
+
+        keys = load_json_file(KEYS_PATH, required=True)
+        exact = [k.lower() for k in keys.get("EXACT_KEYS", [])]
+        assert "stkn" in exact, "La chiave 'stkn' manca da EXACT_KEYS: il parametro di share Instagram (es. ?stkn=...) non viene rimosso"
+
+
+# ---------------------------------------------------------------------------
+# Aggressive query strip: copre tracker sconosciuti (non in keys.json/ClearURLs)
+# tentando di rimuovere l'INTERA query e validando con PageSignals, invece di
+# dover elencare ogni singolo nuovo parametro (es. il caso "stkn").
+# ---------------------------------------------------------------------------
+
+
+def _make_sanitizer(exact_keys=frozenset(), *, aggressive=True) -> Sanitizer:
+    from sanitizelinkbot.app_config import AppConfig
+
+    conf = AppConfig(
+        max_concurrency=2,
+        cache_max_size=10,
+        connections_per_host=2,
+        max_redirects=5,
+        timeout_sec=10,
+        ttl_dns_cache=60,
+        valida_link_post_pulizia=True,
+        max_unwrap_hops=3,
+        max_consent_hops=3,
+        urlscan_api_key=None,
+        log_level="DEBUG",
+        aggressive_query_strip=aggressive,
+    )
+    return Sanitizer(
+        exact_keys=set(exact_keys),
+        prefix_keys=(),
+        ends_with=(),
+        frag_keys=(),
+        conf=conf,
+    )
+
+
+class TestAggressiveQueryStrip:
+    def _signals(self, url, *, status=200, canonical=None, title=None):
+        from sanitizelinkbot.sanitizer import PageSignals
+
+        return PageSignals(
+            final_url=url,
+            url_path=url.split("?")[0],
+            status=status,
+            content_type="text/html",
+            etag=None,
+            lastmod=None,
+            canonical=canonical,
+            og_url=None,
+            title=title,
+            chunk_hash=None,
+        )
+
+    async def test_unknown_tracker_stripped_when_signals_match(self):
+        """Un parametro MAI visto prima (non in EXACT_KEYS) sparisce se la pagina risulta identica.
+
+        Simula il caso "stkn": il tracker non è enumerato da nessuna parte, ma la validazione
+        via canonical conferma che è innocuo, quindi la versione senza query viene usata.
+        """
+        san = _make_sanitizer()  # nessuna chiave nota: "stkn_futuro" non verrebbe mai rimosso dalla pulizia standard
+        dirty = "https://www.instagram.com/reel/XYZ/?stkn_futuro=abc123"
+        clean_no_query = "https://www.instagram.com/reel/XYZ/"
+
+        san.do_redirect = AsyncMock(
+            return_value=self._signals(dirty, canonical=clean_no_query)
+        )
+        with patch(
+            "sanitizelinkbot.sanitizer.PageSignals._fetch_signals",
+            new=AsyncMock(
+                return_value=self._signals(clean_no_query, canonical=clean_no_query)
+            ),
+        ):
+            result_url, _ = await san._sanitize_url_impl(dirty, opts=_opts())
+
+        assert "stkn_futuro" not in result_url, (
+            f"Tracker sconosciuto non rimosso ({result_url!r}): il tentativo aggressivo "
+            "dovrebbe coprire anche i parametri mai enumerati in keys.json"
+        )
+
+    async def test_content_param_kept_when_aggressive_strip_breaks_page(self):
+        """Se rimuovere TUTTO cambia il contenuto (es. "page="), si ripiega sulla pulizia
+        standard (che rimuove solo il tracker noto "fbclid") invece di restituire un link rotto.
+        """
+        san = _make_sanitizer({"fbclid"})
+        dirty = "https://example.com/list?fbclid=x&page=2"
+        aggressive_url = "https://example.com/list"
+        standard_cleaned = "https://example.com/list?page=2"
+
+        sig_orig = self._signals(dirty, title="Lista - Pagina 2")
+        sig_aggressive_wrong_page = self._signals(aggressive_url, title="Lista - Pagina 1")
+        sig_cleaned_ok = self._signals(standard_cleaned, title="Lista - Pagina 2")
+
+        san.do_redirect = AsyncMock(return_value=sig_orig)
+        with patch(
+            "sanitizelinkbot.sanitizer.PageSignals._fetch_signals",
+            new=AsyncMock(side_effect=[sig_aggressive_wrong_page, sig_cleaned_ok]),
+        ):
+            result_url, _ = await san._sanitize_url_impl(dirty, opts=_opts())
+
+        assert "page=2" in result_url, (
+            f"Contenuto perso ({result_url!r}): la rimozione aggressiva ha rotto la "
+            "pagina e non si è ripiegato correttamente sulla pulizia standard"
+        )
+        assert "fbclid" not in result_url, "Il tracker noto fbclid doveva comunque sparire"
+
+    async def test_disabled_via_config_skips_aggressive_attempt(self):
+        """aggressive_query_strip=False: nessun tentativo di rimozione totale, solo comportamento standard."""
+        san = _make_sanitizer({"fbclid"}, aggressive=False)
+        dirty = "https://example.com/page?fbclid=x&unknown_future_tracker=1"
+        standard_cleaned = "https://example.com/page?unknown_future_tracker=1"
+
+        sig_orig = self._signals(dirty, title="Pagina")
+        sig_cleaned = self._signals(standard_cleaned, title="Pagina")
+
+        san.do_redirect = AsyncMock(return_value=sig_orig)
+        fetch_mock = AsyncMock(return_value=sig_cleaned)
+        with patch(
+            "sanitizelinkbot.sanitizer.PageSignals._fetch_signals", new=fetch_mock
+        ):
+            result_url, _ = await san._sanitize_url_impl(dirty, opts=_opts())
+
+        fetch_mock.assert_awaited_once()  # una sola chiamata: niente tentativo aggressivo
+        assert "unknown_future_tracker=1" in result_url, (
+            "Con il flag disattivato il parametro sconosciuto deve restare (comportamento pre-esistente)"
+        )
+
+    async def test_domain_learned_unsafe_skips_future_aggressive_attempts(self):
+        """Dopo un fallimento su un dominio, i link successivi dello stesso dominio non
+        devono rifare la richiesta HTTP inutile per il tentativo aggressivo: va dritti
+        alla pulizia standard, che risolve comunque il link (solo più veloce).
+        """
+        san = _make_sanitizer({"fbclid"})
+        url1 = "https://example.com/list?fbclid=x&page=2"
+        url2 = "https://example.com/other?fbclid=y&page=5"
+
+        sig_orig1 = self._signals(url1, title="Lista - Pagina 2")
+        sig_aggressive_wrong = self._signals("https://example.com/list", title="Lista - Pagina 1")
+        sig_cleaned_ok1 = self._signals("https://example.com/list?page=2", title="Lista - Pagina 2")
+
+        san.do_redirect = AsyncMock(return_value=sig_orig1)
+        with patch(
+            "sanitizelinkbot.sanitizer.PageSignals._fetch_signals",
+            new=AsyncMock(side_effect=[sig_aggressive_wrong, sig_cleaned_ok1]),
+        ):
+            await san._sanitize_url_impl(url1, opts=_opts())  # impara che example.com non è sicuro
+
+        sig_orig2 = self._signals(url2, title="Altra - Pagina 5")
+        sig_cleaned_ok2 = self._signals("https://example.com/other?page=5", title="Altra - Pagina 5")
+        san.do_redirect = AsyncMock(return_value=sig_orig2)
+        fetch_mock2 = AsyncMock(return_value=sig_cleaned_ok2)
+        with patch(
+            "sanitizelinkbot.sanitizer.PageSignals._fetch_signals", new=fetch_mock2
+        ):
+            result_url, _ = await san._sanitize_url_impl(url2, opts=_opts())
+
+        fetch_mock2.assert_awaited_once()  # niente tentativo aggressivo: dominio già noto come non sicuro
+        assert "page=5" in result_url and "fbclid" not in result_url

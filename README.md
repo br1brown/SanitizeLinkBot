@@ -194,6 +194,7 @@ Definisce le regole di pulizia:
 | HTTP_CONNECTIONS_PER_HOST     | 10      | Connessioni simultanee       |
 | HTTP_TTL_DNS_CACHE            | 60      | Cache DNS                    |
 | HTTP_VALIDA_LINK_POST_PULIZIA | true    | Validazione link             |
+| HTTP_AGGRESSIVE_QUERY_STRIP   | true    | Prova a rimuovere l'intera query string (anche tracker sconosciuti/non ancora in keys.json), validando con la stessa verifica di HTTP_VALIDA_LINK_POST_PULIZIA |
 | MAX_UNWRAP_HOPS                | 3       | Hop massimi smontaggio link wrapper (ClearURLs + Debounce) |
 | MAX_CONSENT_HOPS               | 3       | Hop massimi interstitial di consenso incatenati |
 | LOG_LEVEL                     | INFO    | Livello log                  |

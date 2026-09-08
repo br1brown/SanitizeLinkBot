@@ -58,6 +58,12 @@ class AppConfig:
     max_consent_hops: int  # hop massimi nel seguire interstitial di consenso incatenati
     urlscan_api_key: str | None  # Chiave API per urlscan.io (opzionale)
     log_level: str | None
+    aggressive_query_strip: bool = (
+        True  # se True, tenta di rimuovere l'intera query string (non solo i tracker noti)
+        # prima della pulizia standard, verificando via PageSignals che la pagina sia la stessa:
+        # copre i tracker nuovi/sconosciuti (non ancora in keys.json/ClearURLs) senza bisogno
+        # di aggiungerli uno per uno appena vengono scoperti.
+    )
 
     @classmethod
     def load(cls) -> "AppConfig":
@@ -75,6 +81,7 @@ class AppConfig:
             max_consent_hops=_get_int("MAX_CONSENT_HOPS", 3),
             urlscan_api_key=os.getenv("URLSCAN_API_KEY"),
             log_level=_normalize_log_level(os.getenv("LOG_LEVEL", "INFO")),
+            aggressive_query_strip=_get_bool("HTTP_AGGRESSIVE_QUERY_STRIP", True),
         )
         logger.info("Configurazione dell'applicazione caricata da ENV")
         logger.debug("Dettagli configurazione %s", conf)
@@ -87,5 +94,5 @@ class AppConfig:
             f"timeout_sec={self.timeout_sec}, ttl_dns_cache={self.ttl_dns_cache}, "
             f"valida_link_post_pulizia={self.valida_link_post_pulizia}, max_unwrap_hops={self.max_unwrap_hops}, "
             f"max_consent_hops={self.max_consent_hops}, urlscan_api_key={'***' if self.urlscan_api_key else None}, "
-            f"log_level={self.log_level})"
+            f"log_level={self.log_level}, aggressive_query_strip={self.aggressive_query_strip})"
         )
