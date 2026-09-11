@@ -118,6 +118,7 @@ async def main() -> None:
     application.add_handler(CommandHandler("start", handlers.cmd_start))
     application.add_handler(CommandHandler("help", handlers.cmd_help))
     application.add_handler(CommandHandler("sanifica", handlers.cmd_sanifica))
+    application.add_handler(CommandHandler("alternative", handlers.cmd_alternative))
     if CONFIG.urlscan_api_key:
         application.add_handler(CommandHandler("scan", handlers.cmd_scan))
 
@@ -187,10 +188,11 @@ async def main() -> None:
         BotCommand("help", "Come usare il bot"),
         BotCommand("sanifica", "Pulisci i link in un messaggio (in risposta)"),
         BotCommand("settings", "Impostazioni della chat"),
+        BotCommand("alternative", "Frontend alternativi supportati"),
     ]
     if CONFIG.urlscan_api_key:
         bot_commands.insert(
-            -1,
+            3,  # dopo /sanifica, prima di /settings
             BotCommand("scan", "Analizza un URL con urlscan.io — scansione pubblica"),
         )
     await application.bot.set_my_commands(bot_commands)

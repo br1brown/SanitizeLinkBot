@@ -78,42 +78,17 @@ class TestTwitterAdapter:
 
 
 # ---------------------------------------------------------------------------
-# TikTok
+# TikTok e Wikipedia: adapter disabilitati (frontend offline), URL invariati
 # ---------------------------------------------------------------------------
 
 
-class TestTikTokAdapter:
-    def test_regular_video(self, translator):
-        result = translator.translate("https://www.tiktok.com/@user/video/123456")
-        assert "user" in result
-        assert "tiktok.com" not in result
-
-    def test_vm_short_link_not_translated(self, translator):
-        # vm.tiktok.com richiede risoluzione server-side → non traducibile
-        url = "https://vm.tiktok.com/ZMxxxxxx/"
+class TestDisabledAdapters:
+    def test_tiktok_not_translated(self, translator):
+        url = "https://www.tiktok.com/@user/video/123456"
         assert translator.translate(url) == url
 
-
-# ---------------------------------------------------------------------------
-# Wikipedia
-# ---------------------------------------------------------------------------
-
-
-class TestWikipediaAdapter:
-    def test_italian_wikipedia(self, translator):
-        result = translator.translate("https://it.wikipedia.org/wiki/Python")
-        assert "it" in result
-        assert "Python" in result
-        assert "wikipedia.org" not in result
-
-    def test_english_wikipedia(self, translator):
-        result = translator.translate("https://en.wikipedia.org/wiki/URL")
-        assert "en" in result
-        assert "URL" in result
-
-    def test_www_wikipedia_not_translated(self, translator):
-        # www.wikipedia.org non ha un codice lingua → None → URL invariato
-        url = "https://www.wikipedia.org/"
+    def test_wikipedia_not_translated(self, translator):
+        url = "https://it.wikipedia.org/wiki/Python"
         assert translator.translate(url) == url
 
 
@@ -152,6 +127,42 @@ class TestGoogleMapsAdapter:
 
 
 # ---------------------------------------------------------------------------
+# Genius
+# ---------------------------------------------------------------------------
+
+
+class TestGeniusAdapter:
+    def test_lyrics_page(self, translator):
+        result = translator.translate(
+            "https://genius.com/Rick-astley-never-gonna-give-you-up-lyrics"
+        )
+        assert result == "https://lyrics.leemoon.network/Rick-astley-never-gonna-give-you-up-lyrics"
+
+    def test_homepage_not_translated(self, translator):
+        url = "https://genius.com/"
+        assert translator.translate(url) == url
+
+
+# ---------------------------------------------------------------------------
+# Fandom
+# ---------------------------------------------------------------------------
+
+
+class TestFandomAdapter:
+    def test_wiki_page(self, translator):
+        result = translator.translate("https://zelda.fandom.com/wiki/Link")
+        assert result == "https://antifandom.com/zelda/wiki/Link"
+
+    def test_wiki_root(self, translator):
+        result = translator.translate("https://zelda.fandom.com/")
+        assert result == "https://antifandom.com/zelda/"
+
+    def test_non_fandom_not_translated(self, translator):
+        url = "https://example.com/wiki/Page"
+        assert translator.translate(url) == url
+
+
+# ---------------------------------------------------------------------------
 # UrlTranslator generale
 # ---------------------------------------------------------------------------
 
@@ -170,3 +181,14 @@ class TestUrlTranslator:
         r1 = translator.translate("https://youtube.com/watch?v=abc")
         r2 = translator.translate("https://www.youtube.com/watch?v=abc")
         assert r1 == r2
+
+    def test_list_frontends_reflects_active_adapters(self, translator):
+        # Ogni voce ha servizio/frontend/url valorizzati; nessuna riga per un adapter disabilitato
+        frontends = translator.list_frontends()
+        assert len(frontends) == len(translator.adapters)
+        services = [service for service, _frontend, _url in frontends]
+        assert "YouTube" in services
+        assert "Genius" in services
+        assert "Fandom" in services
+        for service, frontend, url in frontends:
+            assert service and frontend and url

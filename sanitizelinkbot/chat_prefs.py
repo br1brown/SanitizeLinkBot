@@ -12,7 +12,9 @@ _DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 os.makedirs(_DATA_DIR, exist_ok=True)
 _DB_PATH = os.path.join(_DATA_DIR, "chat_prefs.db")
 
-PREF_KEYS = frozenset({"show_title", "show_url", "use_privacy_frontend", "group_auto"})
+PREF_KEYS = frozenset(
+    {"show_title", "show_url", "use_privacy_frontend", "group_auto", "show_preview"}
+)
 _VALID_KEYS = PREF_KEYS
 
 # mappa nome attributo Python → nome colonna DB (solo dove divergono)
@@ -28,6 +30,7 @@ class SanitizerOpts:
     use_privacy_frontend: (
         bool  # True = reindirizza verso frontend alternativi (Invidious, xcancel, ecc.)
     )
+    show_preview: bool = True  # True = anteprima link Telegram abilitata (se non ci sono più URL)
 
 
 @dataclass
@@ -38,11 +41,16 @@ class PrefsEntry:
     show_url: bool
     use_privacy_frontend: bool
     group_auto: bool
+    show_preview: bool
 
     @classmethod
     def from_defaults(cls) -> PrefsEntry:
         return cls(
-            show_title=True, show_url=True, use_privacy_frontend=False, group_auto=False
+            show_title=True,
+            show_url=True,
+            use_privacy_frontend=False,
+            group_auto=False,
+            show_preview=True,
         )
 
 
@@ -54,12 +62,16 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+_SELECT_COLS = "show_title, show_url, translate_url, group_auto, show_preview"
+
+
 def _row_to_entry(row: sqlite3.Row) -> PrefsEntry:
     return PrefsEntry(
         show_title=bool(row["show_title"]),
         show_url=bool(row["show_url"]),
         use_privacy_frontend=bool(row["translate_url"]),
         group_auto=bool(row["group_auto"]),
+        show_preview=bool(row["show_preview"]),
     )
 
 
@@ -77,13 +89,22 @@ def _init_db() -> None:
                 group_auto    INTEGER NOT NULL DEFAULT 0
             )
         """)
+        # Migrazione retrocompatibile: le chat già salvate non hanno questa colonna,
+        # ALTER TABLE la aggiunge con il default senza toccare le righe esistenti.
+        existing_cols = {
+            row["name"] for row in conn.execute("PRAGMA table_info(chat_prefs)")
+        }
+        if "show_preview" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE chat_prefs ADD COLUMN show_preview INTEGER NOT NULL DEFAULT 1"
+            )
     logger.info("Database SQLite pronto in %s", _DB_PATH)
 
 
 def _get_sync(chat_id: int) -> PrefsEntry:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT show_title, show_url, translate_url, group_auto FROM chat_prefs WHERE chat_id = ?",
+            f"SELECT {_SELECT_COLS} FROM chat_prefs WHERE chat_id = ?",
             (chat_id,),
         ).fetchone()
     return _row_to_entry(row) if row else PrefsEntry.from_defaults()
@@ -99,7 +120,7 @@ def _set_sync(chat_id: int, key: str, value: bool) -> PrefsEntry:
             (chat_id, val_int),
         )
         row = conn.execute(
-            "SELECT show_title, show_url, translate_url, group_auto FROM chat_prefs WHERE chat_id = ?",
+            f"SELECT {_SELECT_COLS} FROM chat_prefs WHERE chat_id = ?",
             (chat_id,),
         ).fetchone()
     return _row_to_entry(row)
@@ -152,4 +173,5 @@ class ChatPrefs:
             show_url=prf.show_url,
             show_title=prf.show_title,
             use_privacy_frontend=prf.use_privacy_frontend,
+            show_preview=prf.show_preview,
         )

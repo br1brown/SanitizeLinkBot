@@ -47,10 +47,12 @@ class TelegramHandlers:
     async def _send_cleaned_reply(self, target_message, cleaned, opts: SanitizerOpts):
         """Invia il testo sanificato come risposta al messaggio target."""
         reply_text = TelegramIO.build_output(cleaned, opts)
+        # Anteprima disabilitata se l'utente l'ha spenta nelle impostazioni, oppure
+        # per batch: con più URL genererebbe preview multipli rumorosi
+        preview_disabled = (not opts.show_preview) or len(cleaned) > 1
         return await target_message.reply_text(
             reply_text,
-            # Anteprima link disabilitata per batch: con più URL genererebbe preview multipli rumorosi
-            link_preview_options=LinkPreviewOptions(is_disabled=len(cleaned) > 1),
+            link_preview_options=LinkPreviewOptions(is_disabled=preview_disabled),
             parse_mode=ParseMode.HTML,
             do_quote=True,
         )
@@ -210,6 +212,12 @@ class TelegramHandlers:
                     callback_data="toggle:use_privacy_frontend",
                 )
             ],
+            [
+                InlineKeyboardButton(
+                    f"Anteprima link {self._flag(prefs.show_preview)}",
+                    callback_data="toggle:show_preview",
+                )
+            ],
         ]
         if is_group:
             rows.append(
@@ -263,7 +271,8 @@ class TelegramHandlers:
                     f"⚙️ <b>Impostazioni aggiornate</b>\n"
                     f"URL in chiaro {self._flag(prefs.show_url)}  "
                     f"Titolo {self._flag(prefs.show_title)}  "
-                    f"Frontend alt. {self._flag(prefs.use_privacy_frontend)}"
+                    f"Frontend alt. {self._flag(prefs.use_privacy_frontend)}  "
+                    f"Anteprima {self._flag(prefs.show_preview)}"
                 )
                 if query.message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
                     summary += f"  Modalità auto {self._flag(prefs.group_auto)}"
@@ -420,6 +429,29 @@ class TelegramHandlers:
             text += "\n\n" + render_from_file("scan_info")
         text += '\n\nCodice sorgente: <a href="https://github.com/br1brown/SanitizeLinkBot">GitHub</a>'
         await update.message.reply_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+        )
+
+    async def cmd_alternative(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """/alternative — elenca i frontend alternativi supportati.
+        La lista è generata da UrlTranslator.list_frontends(): aggiungere un adapter
+        basta a farlo comparire qui, senza toccare questo handler.
+        """
+        message = update.effective_message
+        if not message:
+            return
+        frontends = self.sanitizer.TRADUCI_URL.list_frontends()
+        rows = [
+            f'• <b>{html.escape(service)}</b> → '
+            f'<a href="{html.escape(url, quote=True)}">{html.escape(frontend)}</a>'
+            for service, frontend, url in frontends
+        ]
+        text = render_from_file("alternative").rstrip("\n") + "\n\n" + "\n".join(rows)
+        await message.reply_text(
             text,
             parse_mode=ParseMode.HTML,
             link_preview_options=LinkPreviewOptions(is_disabled=True),

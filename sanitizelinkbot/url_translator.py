@@ -9,9 +9,17 @@ import re
 
 
 class BaseAdapter:
-    """Classe base per tutti gli adapter. Fornisce helper condivisi."""
+    """Classe base per tutti gli adapter. Fornisce helper condivisi.
+
+    service_name, frontend_name e frontend_url descrivono l'adapter per l'utente
+    (usati da UrlTranslator.list_frontends, mostrato dal comando /alternative):
+    ogni adapter attivo li deve valorizzare.
+    """
 
     supported_hosts: tuple[str, ...] = ()
+    service_name: str = ""
+    frontend_name: str = ""
+    frontend_url: str = ""
 
     def match_host(self, host: str) -> bool:
         return host in self.supported_hosts
@@ -39,6 +47,9 @@ class BaseAdapter:
 class YouTubeAdapter(BaseAdapter):
     supported_hosts = ("youtube.com", "m.youtube.com", "youtu.be")
     BASE = "https://inv.nadeko.net"
+    service_name = "YouTube"
+    frontend_name = "Invidious"
+    frontend_url = BASE
     # Parametri temporali da preservare: rimuoverli cambierebbe il punto di inizio video
     _TIME_PARAMS = ("t", "time_continue", "start")
 
@@ -86,11 +97,15 @@ class YouTubeMusicAdapter(YouTubeAdapter):
     # music.youtube.com usa la stessa struttura URL di youtube.com:
     # eredita tutta la logica di YouTubeAdapter, sovrascrivendo solo i domini supportati
     supported_hosts = ("music.youtube.com",)
+    service_name = "YouTube Music"
 
 
 class TwitterAdapter(BaseAdapter):
     supported_hosts = ("twitter.com", "x.com", "mobile.twitter.com")
     BASE = "https://xcancel.com"
+    service_name = "Twitter/X"
+    frontend_name = "xcancel"
+    frontend_url = BASE
 
     def translate(self, parsed: ParseResult) -> Optional[str]:
         parts = self._split_path(parsed.path)
@@ -102,47 +117,12 @@ class TwitterAdapter(BaseAdapter):
         return None
 
 
-class TikTokAdapter(BaseAdapter):
-    supported_hosts = ("tiktok.com", "vm.tiktok.com")
-    BASE = "https://proxitok.pufe.org"
-
-    def translate(self, parsed: ParseResult) -> Optional[str]:
-        # vm.tiktok.com sono short-link: richiedono un redirect server-side per risolversi.
-        # ProxiTok non li supporta, quindi lasciamo questi URL invariati (None = nessuna traduzione)
-        if self._norm_host(parsed.netloc) == "vm.tiktok.com":
-            return None
-        parts = self._split_path(parsed.path)
-        return f"{self.BASE}/{'/'.join(parts)}" if parts else self.BASE
-
-
-class WikipediaAdapter(BaseAdapter):
-    # Wikipedia ha sottodomini per lingua (it.wikipedia.org, en.wikipedia.org, ecc.):
-    # non possiamo elencarli tutti in supported_hosts, quindi sovrascriviamo match_host
-    supported_hosts = ()
-    _HOST_RE = re.compile(
-        r"^([a-z-]+)\.wikipedia\.org$"
-    )  # cattura il codice lingua (es. "it", "en")
-
-    def match_host(self, host: str) -> bool:
-        return host == "wikipedia.org" or host.endswith(".wikipedia.org")
-
-    def translate(self, parsed: ParseResult) -> Optional[str]:
-        match_lang = self._HOST_RE.match(self._norm_host(parsed.netloc))
-        if not match_lang:
-            return None
-        lang = match_lang.group(1)
-        parts = self._split_path(parsed.path)
-        frag = f"#{parsed.fragment}" if parsed.fragment else ""
-        base = (
-            f"https://wl.vern.cc/{lang}/{'/'.join(parts)}"
-            if parts
-            else f"https://wl.vern.cc/{lang}/"
-        )
-        return base + frag
-
-
 class GoogleSearchAdapter(BaseAdapter):
     supported_hosts = ("google.com",)
+    BASE = "https://duckduckgo.com"
+    service_name = "Google Search"
+    frontend_name = "DuckDuckGo"
+    frontend_url = BASE
 
     def translate(self, parsed: ParseResult) -> Optional[str]:
         if parsed.path != "/search":
@@ -152,29 +132,85 @@ class GoogleSearchAdapter(BaseAdapter):
         query = parse_qs(parsed.query)
         if "q" not in query:
             return None
-        return f"https://duckduckgo.com/?{urlencode({'q': query['q'][0]})}"
+        return f"{self.BASE}/?{urlencode({'q': query['q'][0]})}"
 
 
 class GoogleMapsAdapter(BaseAdapter):
     supported_hosts = ("maps.google.com",)
+    BASE = "https://www.openstreetmap.org"
+    service_name = "Google Maps"
+    frontend_name = "OpenStreetMap"
+    frontend_url = BASE
 
     def translate(self, parsed: ParseResult) -> Optional[str]:
         query = parse_qs(parsed.query)
         if "q" in query:
-            return f"https://www.openstreetmap.org/search?{urlencode({'query': query['q'][0]})}"
-        return (
-            "https://www.openstreetmap.org/"  # fallback: homepage OSM se non c'è query
-        )
+            return f"{self.BASE}/search?{urlencode({'query': query['q'][0]})}"
+        return f"{self.BASE}/"  # fallback: homepage OSM se non c'è query
+
+
+class GeniusAdapter(BaseAdapter):
+    supported_hosts = ("genius.com",)
+    BASE = "https://lyrics.leemoon.network"
+    service_name = "Genius"
+    frontend_name = "Dumb"
+    frontend_url = BASE
+
+    def translate(self, parsed: ParseResult) -> Optional[str]:
+        parts = self._split_path(parsed.path)
+        return f"{self.BASE}/{'/'.join(parts)}" if parts else None
+
+
+class FandomAdapter(BaseAdapter):
+    # I wiki Fandom vivono su sottodomini (zelda.fandom.com, ecc.): non elencabili in
+    # supported_hosts, quindi sovrascriviamo match_host come per Wikipedia
+    supported_hosts = ()
+    BASE = "https://antifandom.com"
+    service_name = "Fandom"
+    frontend_name = "BreezeWiki"
+    frontend_url = BASE
+    _HOST_RE = re.compile(r"^([a-z0-9-]+)\.fandom\.com$")
+
+    def match_host(self, host: str) -> bool:
+        return bool(self._HOST_RE.match(host))
+
+    def translate(self, parsed: ParseResult) -> Optional[str]:
+        match_sub = self._HOST_RE.match(self._norm_host(parsed.netloc))
+        if not match_sub:
+            return None
+        subdomain = match_sub.group(1)
+        parts = self._split_path(parsed.path)
+        path = "/".join(parts)
+        return f"{self.BASE}/{subdomain}/{path}" if path else f"{self.BASE}/{subdomain}/"
 
 
 # ---------------------------------------------------------------------------
 # Adapter disabilitati — frontend offline al momento della disabilitazione
 # ---------------------------------------------------------------------------
-# RedditAdapter     → teddit.net offline
-# InstagramAdapter  → pixwox.com offline, nessun sostituto affidabile
-# TumblrAdapter     → tb.opnxng.com (Priviblur) offline
-# GeniusAdapter     → intellectual.insprill.net offline
-# GoodreadsAdapter  → biblioreads.eu.org offline, nessun sostituto affidabile
+# RedditAdapter        → teddit.net offline; anche Redlib (erede di Libreddit) è vivo ma
+#                        ogni istanza pubblica trovata mostra una verifica anti-bot
+#                        (Cloudflare/DDOS-Guard): un bot senza browser reale riceve solo
+#                        quella pagina, non il contenuto
+# InstagramAdapter     → pixwox.com offline, nessun sostituto affidabile
+# TumblrAdapter        → tb.opnxng.com (Priviblur) offline
+# GoodreadsAdapter     → biblioreads.eu.org offline, nessun sostituto affidabile
+# TikTokAdapter        → proxitok.pufe.org offline; tutte le istanze pubbliche ProxiTok
+#                        verificate (pabloferreiro.es, pussthecat.org, lunar.icu, r4fo.com,
+#                        belloworld.it, wpme.pl, ecc.) risultano offline o irraggiungibili
+# WikipediaAdapter     → wl.vern.cc (Wikiless) offline; il progetto upstream risulta
+#                        abbandonato e le istanze note (esmailelbob.xyz, northboot.xyz)
+#                        sono irraggiungibili
+# ImdbAdapter          → Libremdb: le istanze verificate rispondono ma danno errore 500
+#                        sulle pagine di un titolo (iket.me) o sono bloccate/irraggiungibili
+#                        (pussthecat.org, esmailelbob.xyz)
+# StackOverflowAdapter → AnonymousOverflow: risponde ma StackExchange blocca l'IP del
+#                        proxy (errore 403 su ogni domanda provata)
+# ImgurAdapter         → Rimgo (bcow.xyz): la pagina carica solo i metadati (data,
+#                        visualizzazioni), l'immagine vera e propria non viene servita
+#                        — Imgur blocca gli IP dei data center usati dai proxy pubblici
+# GoogleTranslateAdapter → Lingva (lingva.ml): risponde ma traduce nella lingua sbagliata
+#                        (es. richiesta it→en, risposta in croato) indipendentemente dal
+#                        testo — bug riproducibile, non un problema di rete
 
 
 class UrlTranslator:
@@ -185,12 +221,22 @@ class UrlTranslator:
             YouTubeAdapter,
             YouTubeMusicAdapter,
             TwitterAdapter,
-            TikTokAdapter,
-            WikipediaAdapter,
             GoogleSearchAdapter,
             GoogleMapsAdapter,
+            GeniusAdapter,
+            FandomAdapter,
         ]
         self.adapters = [cls() for cls in classes]
+
+    def list_frontends(self) -> list[tuple[str, str, str]]:
+        """Servizio, frontend e URL per ogni adapter attivo, nell'ordine con cui vengono provati.
+        Usato dal comando /alternative: aggiungere un adapter alla lista in __init__
+        lo fa comparire qui automaticamente, senza toccare la documentazione a mano.
+        """
+        return [
+            (adapter.service_name, adapter.frontend_name, adapter.frontend_url)
+            for adapter in self.adapters
+        ]
 
     def translate(self, url: str) -> str:
         try:
