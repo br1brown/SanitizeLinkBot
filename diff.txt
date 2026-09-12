@@ -1,0 +1,623 @@
+﻿diff --git a/keys.json b/keys.json
+index 970f1c5..add98f5 100644
+--- a/keys.json
++++ b/keys.json
+@@ -7,7 +7,6 @@
+     "_fbp",
+     "_hsenc",
+     "_hsmi",
+-    "ab_channel",
+     "abtest",
+     "aff",
+     "aff_source",
+@@ -52,7 +51,6 @@
+     "fbc",
+     "fbclid",
+     "fblid",
+-    "feature",
+     "flow_id",
+     "gad_source",
+     "gbraid",
+@@ -62,12 +60,8 @@
+     "hsCtaTracking",
+     "ibi",
+     "icid",
+-    "igsh",
+-    "igshid",
+-    "igsi",
+     "img_index",
+     "irclickid",
+-    "is_from_webapp",
+     "isi",
+     "itm_campaign",
+     "itm_medium",
+@@ -78,11 +72,9 @@
+     "li_sid",
+     "li_track",
+     "linkCode",
+-    "lipi",
+     "mbid",
+     "mc_cid",
+     "mc_eid",
+-    "mibextid",
+     "mkt_tok",
+     "ml_subscriber",
+     "ml_subscriber_hash",
+@@ -108,8 +100,6 @@
+     "p_t",
+     "PID",
+     "PID",
+-    "pin_id",
+-    "pin_tag",
+     "placement",
+     "pp",
+     "pp_id",
+@@ -133,7 +123,6 @@
+     "ScCid",
+     "scid",
+     "sei",
+-    "sender_device",
+     "session_id",
+     "sid",
+     "sf_id",
+@@ -151,15 +140,11 @@
+     "sid",
+     "sig",
+     "slof",
+-    "snapid",
+-    "source_pin_id",
+     "sourceid",
+-    "spm",
+     "spMailingID",
+     "spref",
+     "sref",
+     "srsltid",
+-    "stkn",
+     "sznclid",
+     "tblci",
+     "trackingId",
+@@ -186,7 +171,6 @@
+     "vgo_ee",
+     "wbraid",
+     "WT.mc_id",
+-    "xmt",
+     "yadclid",
+     "yadordid",
+     "yclid",
+diff --git a/sanitizelinkbot/__main__.py b/sanitizelinkbot/__main__.py
+index 723d7e3..3bbb8fa 100644
+--- a/sanitizelinkbot/__main__.py
++++ b/sanitizelinkbot/__main__.py
+@@ -21,6 +21,7 @@ from .utils import (
+     load_json_file,
+     KEYS_PATH,
+     CLEARURLS_PATH,
++    CUSTOM_PROVIDERS_PATH,
+     DEBOUNCE_PATH,
+     PROJECT_ROOT,
+ )
+@@ -75,7 +76,9 @@ KEYS = load_json_file(KEYS_PATH)
+ # ClearURLs: caricamento sincrono all'avvio (il loop asyncio non ├¿ ancora attivo).
+ # Se il file manca, il loader resta in stato "non caricato" e viene ignorato dalla pipeline.
+ # Il file viene scaricato dal task monthly_updater al primo giro (~5 minuti dopo l'avvio).
+-_clearurls_loader = ClearUrlsLoader(Path(CLEARURLS_PATH))
++_clearurls_loader = ClearUrlsLoader(
++    Path(CLEARURLS_PATH), custom_providers_path=Path(CUSTOM_PROVIDERS_PATH)
++)
+ _clearurls_loader.load_sync()
+ 
+ # Debounce (Brave): stesso schema di caricamento di ClearURLs, layer complementare
+diff --git a/sanitizelinkbot/clearurls_loader.py b/sanitizelinkbot/clearurls_loader.py
+index 5f5a6c4..2ee98f3 100644
+--- a/sanitizelinkbot/clearurls_loader.py
++++ b/sanitizelinkbot/clearurls_loader.py
+@@ -7,6 +7,7 @@ from __future__ import annotations
+ # da link wrapper. Questo modulo compila quel JSON in strutture ottimizzate per lookup rapido.
+ 
+ import asyncio
++import itertools
+ import json
+ import os
+ import re
+@@ -124,23 +125,19 @@ def _compile_provider(name: str, raw: dict) -> Optional[ProviderRules]:
+     )
+ 
+ 
+-def _compile_index(data: dict) -> ClearUrlsIndex:
+-    """Compila il JSON ClearURLs in un ClearUrlsIndex.
++def _compile_index(providers_items) -> ClearUrlsIndex:
++    """Compila coppie (nome, provider) ClearURLs in un ClearUrlsIndex.
+ 
+-    I provider vengono separati in due gruppi:
+-      - specifici  (urlPattern con \\. ÔåÆ ancora su dominio reale): testati prima
+-      - universali (urlPattern senza \\. ÔåÆ pattern generico come .*): testati dopo
+-
+-    L'ordinamento garantisce che regole dominio-specifiche abbiano priorit├á su quelle globali
+-    (es. le regole Amazon devono essere applicate prima di globalRules).
+-    La classificazione usa una semplice ricerca di stringa sul pattern compilato:
+-    nessun parsing di regex, nessuna euristica fragile.
++    I provider vengono separati in due gruppi, specifici prima e universali dopo:
++    "specifici" = urlPattern ancorato su un dominio reale (contiene \\.), "universali"
++    = pattern generico (es. globalRules con .*). La classificazione ├¿ una ricerca di
++    stringa sul pattern compilato, non un parsing di regex.
+     """
+     specific: list[ProviderRules] = []
+     universal: list[ProviderRules] = []
+     count_skipped = 0
+ 
+-    for name, raw in data.get("providers", {}).items():
++    for name, raw in providers_items:
+         provider = _compile_provider(name, raw)
+         if provider is None:
+             count_skipped += 1
+@@ -170,30 +167,68 @@ class ClearUrlsLoader:
+     I reload usano asyncio.Lock per evitare due aggiornamenti concorrenti.
+     """
+ 
+-    def __init__(self, rules_path: Path) -> None:
++    def __init__(
++        self, rules_path: Path, custom_providers_path: Optional[Path] = None
++    ) -> None:
+         self._rules_path = rules_path
++        self._custom_providers_path = custom_providers_path
+         self._index: Optional[ClearUrlsIndex] = None  # None finch├® non ├¿ caricato
+         # Lock solo per il reload: evita due download/compilazioni sovrapposti
+         self._reload_lock = asyncio.Lock()
+ 
++    def _load_custom_providers(self) -> dict:
++        """Carica custom_providers.json: provider mantenuti dal progetto, stesso formato
++        di ClearURLs (urlPattern + rules), per parametri legati a un dominio preciso.
++        File opzionale e statico: un errore qui non blocca il caricamento delle regole ClearURLs.
++        """
++        if not self._custom_providers_path or not self._custom_providers_path.exists():
++            return {}
++        try:
++            raw = json.loads(self._custom_providers_path.read_text(encoding="utf-8"))
++            providers = raw.get("providers", {})
++            if not isinstance(providers, dict):
++                raise ValueError("la chiave 'providers' non ├¿ un oggetto")
++            return providers
++        except Exception as exc:
++            logger.error(
++                "Caricamento di custom_providers.json fallito (ignorato): %s", exc
++            )
++            return {}
++
++    def _build_index(self, data: dict) -> ClearUrlsIndex:
++        """Compila insieme i provider scaricati da ClearURLs e quelli custom del progetto.
++        Le due fonti restano coppie (nome, provider) separate fino alla compilazione: un
++        nome custom uguale a un nome ufficiale si somma alle sue regole invece di sostituirle.
++        """
++        official_items = data.get("providers", {}).items()
++        custom_items = self._load_custom_providers().items()
++        return _compile_index(itertools.chain(official_items, custom_items))
++
+     def load_sync(self) -> None:
+         """Caricamento sincrono all'avvio, prima che il loop asyncio sia attivo.
+-        Se il file manca, il loader resta non caricato: il bot parte con solo keys.json.
++        Se il file delle regole scaricate manca, l'indice si compila comunque con le
++        sole regole custom del progetto: is_loaded resta True fin da subito.
+         """
+-        if not self._rules_path.exists():
++        data: dict = {}
++        if self._rules_path.exists():
++            try:
++                data = json.loads(self._rules_path.read_text(encoding="utf-8"))
++            except Exception as exc:
++                logger.error(
++                    "Caricamento delle regole ClearURLs dal disco fallito: %s", exc
++                )
++        else:
+             logger.warning(
+-                "File delle regole ClearURLs non trovato in %s ÔÇö layer disabilitato fino al primo download",
++                "File delle regole ClearURLs non trovato in %s ÔÇö uso solo le regole custom fino al primo download",
+                 self._rules_path,
+             )
+-            return
+         try:
+-            data = json.loads(self._rules_path.read_text(encoding="utf-8"))
+-            self._index = _compile_index(data)
+-            logger.info("Regole ClearURLs caricate da %s", self._rules_path)
+-        except Exception as exc:
+-            logger.error(
+-                "Caricamento delle regole ClearURLs dal disco fallito: %s", exc
++            self._index = self._build_index(data)
++            logger.info(
++                "Regole caricate (%d provider)", len(self._index.providers)
+             )
++        except Exception as exc:
++            logger.error("Costruzione dell'indice delle regole fallita: %s", exc)
+ 
+     async def reload_async(self) -> bool:
+         """Ricarica dal disco in modo asincrono. File I/O in thread pool per non bloccare il loop.
+@@ -207,7 +242,7 @@ class ClearUrlsLoader:
+                     None,
+                     lambda: self._rules_path.read_text(encoding="utf-8"),
+                 )
+-                new_index = _compile_index(json.loads(text))
++                new_index = self._build_index(json.loads(text))
+                 self._index = new_index  # swap atomico: le coroutine in corso vedono o vecchio o nuovo, mai intermedio
+                 logger.info("Regole ClearURLs ricaricate correttamente")
+                 return True
+diff --git a/sanitizelinkbot/sanitizer.py b/sanitizelinkbot/sanitizer.py
+index 22126a4..50cda9a 100644
+--- a/sanitizelinkbot/sanitizer.py
++++ b/sanitizelinkbot/sanitizer.py
+@@ -111,6 +111,51 @@ def _build_dns_resolver() -> "aiohttp.abc.AbstractResolver | None":
+         return None
+ 
+ 
++# Alcune pagine (tipicamente app JS come Instagram, X/Twitter, TikTok, Threads, Facebook)
++# mostrano il vero titolo/didascalia solo ai bot di anteprima dei client di messaggistica
++# (├¿ lo stesso motivo per cui incollare uno di questi link direttamente in Telegram mostra
++# l'anteprima completa): a chiunque altro servono un placeholder col nome del sito, spesso
++# con una tagline fissa dietro ("TikTok - Make Your Day", "Facebook - log in or sign up").
++# Invece di enumerare i domini, il segnale ├¿ parametrico: consideriamo placeholder un
++# titolo che, per intero o nel suo primo segmento prima di un separatore, non ├¿ altro che
++# il nome host stesso (i trattini contano come separatori di parola, es. "cool-app.com" ÔåÆ
++# "cool app"). Rilevato questo, un secondo GET con quello User-Agent ÔÇö nessun servizio
++# esterno, nessuna scansione ÔÇö recupera il titolo reale.
++_CRAWLER_UA = "TelegramBot (like TwitterBot)"
++
++# Separatori tipici tra nome del sito e tagline in un <title> generico:
++# "Brand - tagline", "Brand | tagline", "Brand: tagline", "Brand ÔÇó tagline", "Brand (extra)"
++_RE_TITLE_SEPARATOR = re.compile(r"\s*[-ÔÇô|:ÔÇó(]\s*")
++
++
++def _title_matches_hostname(title: str | None, domain_no_www: str) -> bool:
++    """True se il titolo (per intero, o solo il segmento prima di un separatore) ├¿ il nome
++    host stesso: segnale di placeholder generico, non di contenuto reale. Un titolo assente
++    non basta da solo ÔÇö troppe pagine normali non hanno <title> per altri motivi.
++    """
++    if not title:
++        return False
++    titolo_norm = title.strip().lower()
++    if not titolo_norm:
++        return False
++    host_con_spazi = domain_no_www.replace("-", " ")
++
++    def _contenuto_nell_host(frammento: str) -> bool:
++        if not frammento:
++            return False
++        # \b non basta da solo (parole con Unicode/accenti), ma qui host e placeholder
++        # sono sempre ASCII: i confini di parola bastano a evitare falsi positivi tipo
++        # "x" dentro "example.com"
++        pattern = r"(?<![a-z0-9])" + re.escape(frammento) + r"(?![a-z0-9])"
++        return bool(re.search(pattern, host_con_spazi, re.IGNORECASE))
++
++    if _contenuto_nell_host(titolo_norm):
++        return True
++
++    primo_segmento = _RE_TITLE_SEPARATOR.split(titolo_norm, maxsplit=1)[0].strip()
++    return primo_segmento != titolo_norm and _contenuto_nell_host(primo_segmento)
++
++
+ def _extract_consent_continue(url: str) -> str | None:
+     """Restituisce l'URL reale dal parametro continue= di una pagina di consenso nota, o None."""
+     try:
+@@ -307,6 +352,63 @@ class PageSignals:
+         msg["content-type"] = raw_ct_header or ""
+         return msg.get_param("charset") or "utf-8"
+ 
++    @staticmethod
++    async def _fetch_title_with_crawler_ua(
++        url: str, sanita: "Sanitizer"
++    ) -> Optional[str]:
++        """Rif├á il GET con lo User-Agent dei bot di anteprima (vedi _CRAWLER_UA sopra) per
++        recuperare il titolo reale sui domini che lo nascondono ai browser generici.
++        Best-effort: qualunque errore lascia semplicemente il titolo gi├á trovato invariato.
++        """
++        headers = {
++            "User-Agent": _CRAWLER_UA,
++            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
++        }
++        try:
++            session = await sanita._get_session()
++            request_timeout = aiohttp.ClientTimeout(
++                total=sanita.conf.timeout_sec, connect=sanita.conf.timeout_sec / 3
++            )
++            async with session.get(
++                url,
++                headers=headers,
++                timeout=request_timeout,
++                max_redirects=sanita.conf.max_redirects,
++            ) as resp:
++                if not (200 <= resp.status < 300):
++                    return None
++
++                chunks = []
++                bytes_accumulated = 0
++                async for blocco in resp.content.iter_chunked(16_384):
++                    chunks.append(blocco)
++                    bytes_accumulated += len(blocco)
++                    if (
++                        _RE_TITLE_CLOSE_B.search(blocco)
++                        or bytes_accumulated >= 1_048_576
++                    ):
++                        break
++                head_bytes = b"".join(chunks)
++
++                charset = PageSignals._pick_charset(resp.headers.get("Content-Type"))
++                try:
++                    head_text = head_bytes.decode(charset, errors="strict")
++                except Exception:
++                    head_text = head_bytes.decode("utf-8", errors="ignore")
++
++                for title_pattern in (_RE_TITLE, _RE_OGTITLE, _RE_TWTITLE):
++                    match_title = title_pattern.search(head_text)
++                    if match_title:
++                        titolo = PageSignals._normalize_title(match_title.group(1))
++                        if titolo:
++                            return titolo
++                return None
++        except Exception as err:
++            logger.debug(
++                "Fallback User-Agent crawler per il titolo fallito: %s", type(err).__name__
++            )
++            return None
++
+     @staticmethod
+     async def _fetch_signals(
+         url: str,
+@@ -330,7 +432,10 @@ class PageSignals:
+         titolo_pagina: Optional[str] = None
+ 
+         # User-Agent da browser reale: alcuni siti rispondono 403 agli user-agent non riconosciuti,
+-        # il che farebbe fallire la validazione pur non essendo un problema dell'URL pulito
++        # il che farebbe fallire la validazione pur non essendo un problema dell'URL pulito.
++        # Non possiamo sapere in anticipo se questo dominio nasconder├á il titolo reale (lo
++        # scopriamo solo guardando il risultato, vedi _title_matches_hostname pi├╣ sotto),
++        # quindi la prima richiesta usa sempre questo User-Agent "sicuro ovunque".
+         headers = {
+             "User-Agent": (
+                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+@@ -461,6 +566,21 @@ class PageSignals:
+                                 match_title.group(1)
+                             )
+ 
++                    # Titolo che ├¿ solo il nome del sito stesso: placeholder, non contenuto
++                    # reale (vedi _title_matches_hostname sopra). Un secondo GET con lo
++                    # User-Agent di un bot di anteprima recupera il titolo vero, senza
++                    # servizi esterni n├® dipendere dall'esecuzione di JavaScript.
++                    if opts.show_title:
++                        domain_no_www = re.sub(
++                            r"^www\.", "", urlsplit(final_url).netloc, flags=re.IGNORECASE
++                        ).lower()
++                        if _title_matches_hostname(titolo_pagina, domain_no_www):
++                            crawler_title = await PageSignals._fetch_title_with_crawler_ua(
++                                final_url, sanita
++                            )
++                            if crawler_title:
++                                titolo_pagina = crawler_title
++
+                     # Meta-refresh e redirect JavaScript: aiohttp non li segue (non ├¿ un browser).
+                     # Stesso guard _depth == 0: massimo 1 hop aggiuntivo per evitare loop.
+                     # Meta-refresh ha priorit├á perch├® ├¿ pi├╣ affidabile (standard HTML);
+diff --git a/sanitizelinkbot/utils.py b/sanitizelinkbot/utils.py
+index 724d484..453ca26 100644
+--- a/sanitizelinkbot/utils.py
++++ b/sanitizelinkbot/utils.py
+@@ -22,6 +22,9 @@ BASE_DIR = (
+ )
+ PROJECT_ROOT = os.path.dirname(BASE_DIR)
+ KEYS_PATH = os.path.join(PROJECT_ROOT, "keys.json")
++# Regole per-dominio mantenute dal progetto, stesso formato "provider" di ClearURLs
++# (urlPattern + rules). File statico, non toccato dagli aggiornamenti di ClearURLs.
++CUSTOM_PROVIDERS_PATH = os.path.join(PROJECT_ROOT, "custom_providers.json")
+ TOKEN_PATH = os.path.join(PROJECT_ROOT, "token.txt")
+ 
+ # Il file viene creato al primo aggiornamento mensile; se mancante il layer ClearURLs ├¿ disabilitato
+diff --git a/tests/test_page_signals.py b/tests/test_page_signals.py
+index 78a112f..f0dc90b 100644
+--- a/tests/test_page_signals.py
++++ b/tests/test_page_signals.py
+@@ -1,7 +1,7 @@
+ """Test per PageSignals: metodi statici e logica di equivalenza."""
+ 
+ import pytest
+-from sanitizelinkbot.sanitizer import PageSignals
++from sanitizelinkbot.sanitizer import PageSignals, _title_matches_hostname
+ 
+ # ---------------------------------------------------------------------------
+ # Helpers
+@@ -345,3 +345,65 @@ class TestEquivalentTo:
+         a = _sig(url_path="https://example.com/page1")
+         b = _sig(url_path="https://example.com/page2")
+         assert not a.equivalent_to(b, check_url=True)
++
++
++# ---------------------------------------------------------------------------
++# _title_matches_hostname
++# ---------------------------------------------------------------------------
++
++
++class TestTitleMatchesHostname:
++    def test_bare_brand_name_matches(self):
++        assert _title_matches_hostname("Instagram", "instagram.com")
++        assert _title_matches_hostname("TikTok", "tiktok.com")
++        assert _title_matches_hostname("X", "x.com")
++
++    def test_hyphenated_host_matches_spaced_title(self):
++        assert _title_matches_hostname("Cool App", "cool-app.com")
++        assert _title_matches_hostname("Some Cool Startup", "some-cool-startup.com")
++
++    def test_missing_title_never_matches(self):
++        assert not _title_matches_hostname(None, "instagram.com")
++        assert not _title_matches_hostname("", "instagram.com")
++
++    def test_real_content_title_does_not_match(self):
++        assert not _title_matches_hostname(
++            "Mario Rossi on Instagram: \"bella giornata\"", "instagram.com"
++        )
++        assert not _title_matches_hostname("Qualcuno (@utente) su X", "x.com")
++
++    def test_word_boundary_avoids_false_positive(self):
++        # "x" non deve combaciare con la "x" dentro "example.com"
++        assert not _title_matches_hostname("x", "example.com")
++
++    def test_subdomain_still_contains_hostname(self):
++        assert _title_matches_hostname("Instagram", "www2.instagram.com")
++
++    def test_unrelated_title_does_not_match(self):
++        assert not _title_matches_hostname("Instagram", "example.com")
++
++    def test_brand_with_tagline_after_dash_matches(self):
++        # Placeholder reali: il nome del sito da solo non basta, c'├¿ quasi sempre
++        # una tagline fissa dietro un separatore ("Brand - tagline generica").
++        assert _title_matches_hostname("TikTok - Make Your Day", "tiktok.com")
++        assert _title_matches_hostname(
++            "Facebook - log in or sign up", "facebook.com"
++        )
++
++    def test_brand_with_trailing_parenthetical_matches(self):
++        assert _title_matches_hostname("X (formerly Twitter)", "x.com")
++
++    def test_real_content_before_dash_does_not_match(self):
++        # Il titolo di un articolo reale ("Titolo - Wikipedia") non deve scattare:
++        # il primo segmento ├¿ il contenuto, non il nome del sito.
++        assert not _title_matches_hostname(
++            "Python (programming language) - Wikipedia", "en.wikipedia.org"
++        )
++
++    def test_homesite_tagline_is_an_accepted_tradeoff(self):
++        # Compromesso accettato: allargando il controllo per beccare "Brand - tagline"
++        # sui siti-app JS, scatta anche su siti normali la cui homepage usa lo stesso
++        # schema (falso positivo innocuo: fa solo una richiesta in pi├╣ col crawler UA).
++        assert _title_matches_hostname(
++            "Wikipedia - Enciclopedia libera", "it.wikipedia.org"
++        )
+diff --git a/tests/test_sanitizer_unit.py b/tests/test_sanitizer_unit.py
+index 39e9dc6..daca98f 100644
+--- a/tests/test_sanitizer_unit.py
++++ b/tests/test_sanitizer_unit.py
+@@ -185,6 +185,93 @@ class TestStripTrackingParams:
+         assert "v=42" in result
+ 
+ 
++# ---------------------------------------------------------------------------
++# keys.json reale: chiavi troppo generiche per stare nella lista globale (kgs, shem,
++# shndl, client, sclient, oe, "is"...) sono in custom_providers.json, per dominio ÔÇö
++# vedi tests/test_clearurls_loader.py. Qui restano solo i controlli su cosa NON deve
++# esserci in keys.json e su cosa non va mai toccato in generale (contenuto vs tracking).
++# ---------------------------------------------------------------------------
++
++
++class TestRealKeysJson:
++    def _load_real_keys(self):
++        from sanitizelinkbot.utils import load_json_file, KEYS_PATH
++
++        return load_json_file(KEYS_PATH, required=True)
++
++    def _sanitizer_with_real_keys(self, conf):
++        keys = self._load_real_keys()
++        return Sanitizer(
++            exact_keys=set(keys.get("EXACT_KEYS", [])),
++            prefix_keys=tuple(keys.get("PREFIX_KEYS", [])),
++            ends_with=tuple(keys.get("ENDS_WITH", [])),
++            frag_keys=tuple(keys.get("FRAG_KEYS", [])),
++            domain_whitelist=keys.get("DOMAIN_WHITELIST", []),
++            conf=conf,
++        )
++
++    def test_google_and_youtube_specific_params_not_global(self, conf):
++        # kgs/shem/shndl/client/sclient/oe/is sono legati a un dominio preciso (Google o
++        # YouTube): devono stare in custom_providers.json, MAI in keys.json, altrimenti
++        # si applicherebbero ovunque (├¿ il bug che ha rotto i link Discord con "is").
++        sanitizer = self._sanitizer_with_real_keys(conf)
++        for risky_key in ("kgs", "shem", "shndl", "client", "sclient", "oe", "is"):
++            assert not sanitizer.is_key_to_remove(risky_key), (
++                f"'{risky_key}' ├¿ nella lista globale keys.json: deve stare in "
++                "custom_providers.json, legato al dominio giusto"
++            )
++
++    def test_discord_cdn_signature_params_kept(self, conf):
++        # "is" NON ├¿ nella lista globale (nonostante ClearURLs/Rules#192 lo segnali come
++        # nuovo tracker di condivisione YouTube): su cdn.discordapp.com "ex"/"is"/"hm" sono
++        # una firma HMAC con scadenza che rende valido il link. Rimuovendo anche solo "is"
++        # il link Discord smette di funzionare (404) ÔÇö chiave troppo generica per essere
++        # sicura a livello globale, il rischio segnalato quando fu aggiunta si ├¿ confermato.
++        sanitizer = self._sanitizer_with_real_keys(conf)
++        url = (
++            "https://cdn.discordapp.com/attachments/123456789/987654321/foto.png"
++            "?ex=66f1a2b3&is=66f0517c&hm=deadbeefcafebabe0123456789abcdef"
++        )
++        result = sanitizer._strip_tracking_params(url)
++        assert "ex=" in result
++        assert "is=" in result
++        assert "hm=" in result
++
++    def test_content_identifying_params_kept(self, conf):
++        # 'stick' (relazione tra entit├á nel knowledge panel) e i token 'gaa_*' (accesso
++        # gratuito Google News a contenuti a pagamento) non sono tracciamento: rimuoverli
++        # cambierebbe cosa viene mostrato o romperebbe l'accesso. Vanno mantenuti.
++        sanitizer = self._sanitizer_with_real_keys(conf)
++        url = (
++            "https://www.nytimes.com/article"
++            "?gaa_at=la&gaa_n=AbC&gaa_ts=123&gaa_sig=xyz"
++        )
++        result = sanitizer._strip_tracking_params(url)
++        assert "gaa_at" in result
++        assert "gaa_n" in result
++        assert "gaa_ts" in result
++        assert "gaa_sig" in result
++
++        stick_url = "https://www.google.com/search?q=test&stick=Ahjkfjw123"
++        stick_result = sanitizer._strip_tracking_params(stick_url)
++        assert "stick=" in stick_result
++
++    def test_youtube_timestamp_not_removed(self):
++        # Bug storico: "t" era in EXACT_KEYS e veniva rimosso da ?v=abc&t=120 senza che
++        # la validazione lo rilevasse (la pagina YouTube ├¿ identica a prescindere da t).
++        exact = [k.lower() for k in self._load_real_keys().get("EXACT_KEYS", [])]
++        assert (
++            "t" not in exact
++        ), "La chiave 't' ├¿ in EXACT_KEYS: verrebbe rimosso il timestamp YouTube (?t=120)"
++
++    def test_instagram_igsi_stkn_not_in_global_keys(self):
++        # 'igsi' e 'stkn' sono parametri di share Instagram: vivono nel provider dedicato
++        # di custom_providers.json, non pi├╣ nella lista globale keys.json.
++        exact = [k.lower() for k in self._load_real_keys().get("EXACT_KEYS", [])]
++        assert "igsi" not in exact
++        assert "stkn" not in exact
++
++
+ # ---------------------------------------------------------------------------
+ # _extract_consent_continue (funzione modulo-level)
+ # ---------------------------------------------------------------------------
+@@ -499,36 +586,6 @@ class TestSanitizeUrlImplFallback:
+             "fbclid" in result_url
+         ), f"URL rotto restituito ({result_url!r}): il fallback sull'originale non ha funzionato"
+ 
+-    def test_youtube_timestamp_not_removed(self):
+-        """keys.json non deve contenere 't' come chiave esatta: ├¿ un timestamp YouTube.
+-
+-        Bug storico: 't' era in EXACT_KEYS e veniva rimosso da ?v=abc&t=120 senza
+-        che la validazione lo rilevasse (la pagina HTML di YouTube ├¿ identica indipendentemente da t).
+-        """
+-        from sanitizelinkbot.utils import load_json_file, KEYS_PATH
+-
+-        keys = load_json_file(KEYS_PATH, required=True)
+-        exact = [k.lower() for k in keys.get("EXACT_KEYS", [])]
+-        assert (
+-            "t" not in exact
+-        ), "La chiave 't' ├¿ in EXACT_KEYS: verrebbe rimosso il timestamp YouTube (?t=120)"
+-
+-    def test_instagram_igsi_removed(self):
+-        """keys.json deve contenere 'igsi': parametro di tracking Instagram come igsh/igshid."""
+-        from sanitizelinkbot.utils import load_json_file, KEYS_PATH
+-
+-        keys = load_json_file(KEYS_PATH, required=True)
+-        exact = [k.lower() for k in keys.get("EXACT_KEYS", [])]
+-        assert "igsi" in exact, "La chiave 'igsi' manca da EXACT_KEYS: il parametro di share Instagram non viene rimosso"
+-
+-    def test_instagram_stkn_removed(self):
+-        """keys.json deve contenere 'stkn': token di share Instagram sui link /reel/, non coperto da ClearURLs."""
+-        from sanitizelinkbot.utils import load_json_file, KEYS_PATH
+-
+-        keys = load_json_file(KEYS_PATH, required=True)
+-        exact = [k.lower() for k in keys.get("EXACT_KEYS", [])]
+-        assert "stkn" in exact, "La chiave 'stkn' manca da EXACT_KEYS: il parametro di share Instagram (es. ?stkn=...) non viene rimosso"
+-
+ 
+ # ---------------------------------------------------------------------------
+ # Aggressive query strip: copre tracker sconosciuti (non in keys.json/ClearURLs)

@@ -186,6 +186,93 @@ class TestStripTrackingParams:
 
 
 # ---------------------------------------------------------------------------
+# keys.json reale: chiavi troppo generiche per stare nella lista globale (kgs, shem,
+# shndl, client, sclient, oe, "is"...) sono in custom_providers.json, per dominio —
+# vedi tests/test_clearurls_loader.py. Qui restano solo i controlli su cosa NON deve
+# esserci in keys.json e su cosa non va mai toccato in generale (contenuto vs tracking).
+# ---------------------------------------------------------------------------
+
+
+class TestRealKeysJson:
+    def _load_real_keys(self):
+        from sanitizelinkbot.utils import load_json_file, KEYS_PATH
+
+        return load_json_file(KEYS_PATH, required=True)
+
+    def _sanitizer_with_real_keys(self, conf):
+        keys = self._load_real_keys()
+        return Sanitizer(
+            exact_keys=set(keys.get("EXACT_KEYS", [])),
+            prefix_keys=tuple(keys.get("PREFIX_KEYS", [])),
+            ends_with=tuple(keys.get("ENDS_WITH", [])),
+            frag_keys=tuple(keys.get("FRAG_KEYS", [])),
+            domain_whitelist=keys.get("DOMAIN_WHITELIST", []),
+            conf=conf,
+        )
+
+    def test_google_and_youtube_specific_params_not_global(self, conf):
+        # kgs/shem/shndl/client/sclient/oe/is sono legati a un dominio preciso (Google o
+        # YouTube): devono stare in custom_providers.json, MAI in keys.json, altrimenti
+        # si applicherebbero ovunque (è il bug che ha rotto i link Discord con "is").
+        sanitizer = self._sanitizer_with_real_keys(conf)
+        for risky_key in ("kgs", "shem", "shndl", "client", "sclient", "oe", "is"):
+            assert not sanitizer.is_key_to_remove(risky_key), (
+                f"'{risky_key}' è nella lista globale keys.json: deve stare in "
+                "custom_providers.json, legato al dominio giusto"
+            )
+
+    def test_discord_cdn_signature_params_kept(self, conf):
+        # "is" NON è nella lista globale (nonostante ClearURLs/Rules#192 lo segnali come
+        # nuovo tracker di condivisione YouTube): su cdn.discordapp.com "ex"/"is"/"hm" sono
+        # una firma HMAC con scadenza che rende valido il link. Rimuovendo anche solo "is"
+        # il link Discord smette di funzionare (404) — chiave troppo generica per essere
+        # sicura a livello globale, il rischio segnalato quando fu aggiunta si è confermato.
+        sanitizer = self._sanitizer_with_real_keys(conf)
+        url = (
+            "https://cdn.discordapp.com/attachments/123456789/987654321/foto.png"
+            "?ex=66f1a2b3&is=66f0517c&hm=deadbeefcafebabe0123456789abcdef"
+        )
+        result = sanitizer._strip_tracking_params(url)
+        assert "ex=" in result
+        assert "is=" in result
+        assert "hm=" in result
+
+    def test_content_identifying_params_kept(self, conf):
+        # 'stick' (relazione tra entità nel knowledge panel) e i token 'gaa_*' (accesso
+        # gratuito Google News a contenuti a pagamento) non sono tracciamento: rimuoverli
+        # cambierebbe cosa viene mostrato o romperebbe l'accesso. Vanno mantenuti.
+        sanitizer = self._sanitizer_with_real_keys(conf)
+        url = (
+            "https://www.nytimes.com/article"
+            "?gaa_at=la&gaa_n=AbC&gaa_ts=123&gaa_sig=xyz"
+        )
+        result = sanitizer._strip_tracking_params(url)
+        assert "gaa_at" in result
+        assert "gaa_n" in result
+        assert "gaa_ts" in result
+        assert "gaa_sig" in result
+
+        stick_url = "https://www.google.com/search?q=test&stick=Ahjkfjw123"
+        stick_result = sanitizer._strip_tracking_params(stick_url)
+        assert "stick=" in stick_result
+
+    def test_youtube_timestamp_not_removed(self):
+        # Bug storico: "t" era in EXACT_KEYS e veniva rimosso da ?v=abc&t=120 senza che
+        # la validazione lo rilevasse (la pagina YouTube è identica a prescindere da t).
+        exact = [k.lower() for k in self._load_real_keys().get("EXACT_KEYS", [])]
+        assert (
+            "t" not in exact
+        ), "La chiave 't' è in EXACT_KEYS: verrebbe rimosso il timestamp YouTube (?t=120)"
+
+    def test_instagram_igsi_stkn_not_in_global_keys(self):
+        # 'igsi' e 'stkn' sono parametri di share Instagram: vivono nel provider dedicato
+        # di custom_providers.json, non più nella lista globale keys.json.
+        exact = [k.lower() for k in self._load_real_keys().get("EXACT_KEYS", [])]
+        assert "igsi" not in exact
+        assert "stkn" not in exact
+
+
+# ---------------------------------------------------------------------------
 # _extract_consent_continue (funzione modulo-level)
 # ---------------------------------------------------------------------------
 
@@ -498,36 +585,6 @@ class TestSanitizeUrlImplFallback:
         assert (
             "fbclid" in result_url
         ), f"URL rotto restituito ({result_url!r}): il fallback sull'originale non ha funzionato"
-
-    def test_youtube_timestamp_not_removed(self):
-        """keys.json non deve contenere 't' come chiave esatta: è un timestamp YouTube.
-
-        Bug storico: 't' era in EXACT_KEYS e veniva rimosso da ?v=abc&t=120 senza
-        che la validazione lo rilevasse (la pagina HTML di YouTube è identica indipendentemente da t).
-        """
-        from sanitizelinkbot.utils import load_json_file, KEYS_PATH
-
-        keys = load_json_file(KEYS_PATH, required=True)
-        exact = [k.lower() for k in keys.get("EXACT_KEYS", [])]
-        assert (
-            "t" not in exact
-        ), "La chiave 't' è in EXACT_KEYS: verrebbe rimosso il timestamp YouTube (?t=120)"
-
-    def test_instagram_igsi_removed(self):
-        """keys.json deve contenere 'igsi': parametro di tracking Instagram come igsh/igshid."""
-        from sanitizelinkbot.utils import load_json_file, KEYS_PATH
-
-        keys = load_json_file(KEYS_PATH, required=True)
-        exact = [k.lower() for k in keys.get("EXACT_KEYS", [])]
-        assert "igsi" in exact, "La chiave 'igsi' manca da EXACT_KEYS: il parametro di share Instagram non viene rimosso"
-
-    def test_instagram_stkn_removed(self):
-        """keys.json deve contenere 'stkn': token di share Instagram sui link /reel/, non coperto da ClearURLs."""
-        from sanitizelinkbot.utils import load_json_file, KEYS_PATH
-
-        keys = load_json_file(KEYS_PATH, required=True)
-        exact = [k.lower() for k in keys.get("EXACT_KEYS", [])]
-        assert "stkn" in exact, "La chiave 'stkn' manca da EXACT_KEYS: il parametro di share Instagram (es. ?stkn=...) non viene rimosso"
 
 
 # ---------------------------------------------------------------------------

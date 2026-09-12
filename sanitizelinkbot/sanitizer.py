@@ -111,6 +111,51 @@ def _build_dns_resolver() -> "aiohttp.abc.AbstractResolver | None":
         return None
 
 
+# Alcune pagine (tipicamente app JS come Instagram, X/Twitter, TikTok, Threads, Facebook)
+# mostrano il vero titolo/didascalia solo ai bot di anteprima dei client di messaggistica
+# (è lo stesso motivo per cui incollare uno di questi link direttamente in Telegram mostra
+# l'anteprima completa): a chiunque altro servono un placeholder col nome del sito, spesso
+# con una tagline fissa dietro ("TikTok - Make Your Day", "Facebook - log in or sign up").
+# Invece di enumerare i domini, il segnale è parametrico: consideriamo placeholder un
+# titolo che, per intero o nel suo primo segmento prima di un separatore, non è altro che
+# il nome host stesso (i trattini contano come separatori di parola, es. "cool-app.com" →
+# "cool app"). Rilevato questo, un secondo GET con quello User-Agent — nessun servizio
+# esterno, nessuna scansione — recupera il titolo reale.
+_CRAWLER_UA = "TelegramBot (like TwitterBot)"
+
+# Separatori tipici tra nome del sito e tagline in un <title> generico:
+# "Brand - tagline", "Brand | tagline", "Brand: tagline", "Brand • tagline", "Brand (extra)"
+_RE_TITLE_SEPARATOR = re.compile(r"\s*[-–|:•(]\s*")
+
+
+def _title_matches_hostname(title: str | None, domain_no_www: str) -> bool:
+    """True se il titolo (per intero, o solo il segmento prima di un separatore) è il nome
+    host stesso: segnale di placeholder generico, non di contenuto reale. Un titolo assente
+    non basta da solo — troppe pagine normali non hanno <title> per altri motivi.
+    """
+    if not title:
+        return False
+    titolo_norm = title.strip().lower()
+    if not titolo_norm:
+        return False
+    host_con_spazi = domain_no_www.replace("-", " ")
+
+    def _contenuto_nell_host(frammento: str) -> bool:
+        if not frammento:
+            return False
+        # \b non basta da solo (parole con Unicode/accenti), ma qui host e placeholder
+        # sono sempre ASCII: i confini di parola bastano a evitare falsi positivi tipo
+        # "x" dentro "example.com"
+        pattern = r"(?<![a-z0-9])" + re.escape(frammento) + r"(?![a-z0-9])"
+        return bool(re.search(pattern, host_con_spazi, re.IGNORECASE))
+
+    if _contenuto_nell_host(titolo_norm):
+        return True
+
+    primo_segmento = _RE_TITLE_SEPARATOR.split(titolo_norm, maxsplit=1)[0].strip()
+    return primo_segmento != titolo_norm and _contenuto_nell_host(primo_segmento)
+
+
 def _extract_consent_continue(url: str) -> str | None:
     """Restituisce l'URL reale dal parametro continue= di una pagina di consenso nota, o None."""
     try:
@@ -308,6 +353,63 @@ class PageSignals:
         return msg.get_param("charset") or "utf-8"
 
     @staticmethod
+    async def _fetch_title_with_crawler_ua(
+        url: str, sanita: "Sanitizer"
+    ) -> Optional[str]:
+        """Rifà il GET con lo User-Agent dei bot di anteprima (vedi _CRAWLER_UA sopra) per
+        recuperare il titolo reale sui domini che lo nascondono ai browser generici.
+        Best-effort: qualunque errore lascia semplicemente il titolo già trovato invariato.
+        """
+        headers = {
+            "User-Agent": _CRAWLER_UA,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        try:
+            session = await sanita._get_session()
+            request_timeout = aiohttp.ClientTimeout(
+                total=sanita.conf.timeout_sec, connect=sanita.conf.timeout_sec / 3
+            )
+            async with session.get(
+                url,
+                headers=headers,
+                timeout=request_timeout,
+                max_redirects=sanita.conf.max_redirects,
+            ) as resp:
+                if not (200 <= resp.status < 300):
+                    return None
+
+                chunks = []
+                bytes_accumulated = 0
+                async for blocco in resp.content.iter_chunked(16_384):
+                    chunks.append(blocco)
+                    bytes_accumulated += len(blocco)
+                    if (
+                        _RE_TITLE_CLOSE_B.search(blocco)
+                        or bytes_accumulated >= 1_048_576
+                    ):
+                        break
+                head_bytes = b"".join(chunks)
+
+                charset = PageSignals._pick_charset(resp.headers.get("Content-Type"))
+                try:
+                    head_text = head_bytes.decode(charset, errors="strict")
+                except Exception:
+                    head_text = head_bytes.decode("utf-8", errors="ignore")
+
+                for title_pattern in (_RE_TITLE, _RE_OGTITLE, _RE_TWTITLE):
+                    match_title = title_pattern.search(head_text)
+                    if match_title:
+                        titolo = PageSignals._normalize_title(match_title.group(1))
+                        if titolo:
+                            return titolo
+                return None
+        except Exception as err:
+            logger.debug(
+                "Fallback User-Agent crawler per il titolo fallito: %s", type(err).__name__
+            )
+            return None
+
+    @staticmethod
     async def _fetch_signals(
         url: str,
         sanita: "Sanitizer",
@@ -330,7 +432,10 @@ class PageSignals:
         titolo_pagina: Optional[str] = None
 
         # User-Agent da browser reale: alcuni siti rispondono 403 agli user-agent non riconosciuti,
-        # il che farebbe fallire la validazione pur non essendo un problema dell'URL pulito
+        # il che farebbe fallire la validazione pur non essendo un problema dell'URL pulito.
+        # Non possiamo sapere in anticipo se questo dominio nasconderà il titolo reale (lo
+        # scopriamo solo guardando il risultato, vedi _title_matches_hostname più sotto),
+        # quindi la prima richiesta usa sempre questo User-Agent "sicuro ovunque".
         headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -460,6 +565,21 @@ class PageSignals:
                             titolo_pagina = PageSignals._normalize_title(
                                 match_title.group(1)
                             )
+
+                    # Titolo che è solo il nome del sito stesso: placeholder, non contenuto
+                    # reale (vedi _title_matches_hostname sopra). Un secondo GET con lo
+                    # User-Agent di un bot di anteprima recupera il titolo vero, senza
+                    # servizi esterni né dipendere dall'esecuzione di JavaScript.
+                    if opts.show_title:
+                        domain_no_www = re.sub(
+                            r"^www\.", "", urlsplit(final_url).netloc, flags=re.IGNORECASE
+                        ).lower()
+                        if _title_matches_hostname(titolo_pagina, domain_no_www):
+                            crawler_title = await PageSignals._fetch_title_with_crawler_ua(
+                                final_url, sanita
+                            )
+                            if crawler_title:
+                                titolo_pagina = crawler_title
 
                     # Meta-refresh e redirect JavaScript: aiohttp non li segue (non è un browser).
                     # Stesso guard _depth == 0: massimo 1 hop aggiuntivo per evitare loop.

@@ -1,7 +1,7 @@
 """Test per PageSignals: metodi statici e logica di equivalenza."""
 
 import pytest
-from sanitizelinkbot.sanitizer import PageSignals
+from sanitizelinkbot.sanitizer import PageSignals, _title_matches_hostname
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -345,3 +345,65 @@ class TestEquivalentTo:
         a = _sig(url_path="https://example.com/page1")
         b = _sig(url_path="https://example.com/page2")
         assert not a.equivalent_to(b, check_url=True)
+
+
+# ---------------------------------------------------------------------------
+# _title_matches_hostname
+# ---------------------------------------------------------------------------
+
+
+class TestTitleMatchesHostname:
+    def test_bare_brand_name_matches(self):
+        assert _title_matches_hostname("Instagram", "instagram.com")
+        assert _title_matches_hostname("TikTok", "tiktok.com")
+        assert _title_matches_hostname("X", "x.com")
+
+    def test_hyphenated_host_matches_spaced_title(self):
+        assert _title_matches_hostname("Cool App", "cool-app.com")
+        assert _title_matches_hostname("Some Cool Startup", "some-cool-startup.com")
+
+    def test_missing_title_never_matches(self):
+        assert not _title_matches_hostname(None, "instagram.com")
+        assert not _title_matches_hostname("", "instagram.com")
+
+    def test_real_content_title_does_not_match(self):
+        assert not _title_matches_hostname(
+            "Mario Rossi on Instagram: \"bella giornata\"", "instagram.com"
+        )
+        assert not _title_matches_hostname("Qualcuno (@utente) su X", "x.com")
+
+    def test_word_boundary_avoids_false_positive(self):
+        # "x" non deve combaciare con la "x" dentro "example.com"
+        assert not _title_matches_hostname("x", "example.com")
+
+    def test_subdomain_still_contains_hostname(self):
+        assert _title_matches_hostname("Instagram", "www2.instagram.com")
+
+    def test_unrelated_title_does_not_match(self):
+        assert not _title_matches_hostname("Instagram", "example.com")
+
+    def test_brand_with_tagline_after_dash_matches(self):
+        # Placeholder reali: il nome del sito da solo non basta, c'è quasi sempre
+        # una tagline fissa dietro un separatore ("Brand - tagline generica").
+        assert _title_matches_hostname("TikTok - Make Your Day", "tiktok.com")
+        assert _title_matches_hostname(
+            "Facebook - log in or sign up", "facebook.com"
+        )
+
+    def test_brand_with_trailing_parenthetical_matches(self):
+        assert _title_matches_hostname("X (formerly Twitter)", "x.com")
+
+    def test_real_content_before_dash_does_not_match(self):
+        # Il titolo di un articolo reale ("Titolo - Wikipedia") non deve scattare:
+        # il primo segmento è il contenuto, non il nome del sito.
+        assert not _title_matches_hostname(
+            "Python (programming language) - Wikipedia", "en.wikipedia.org"
+        )
+
+    def test_homesite_tagline_is_an_accepted_tradeoff(self):
+        # Compromesso accettato: allargando il controllo per beccare "Brand - tagline"
+        # sui siti-app JS, scatta anche su siti normali la cui homepage usa lo stesso
+        # schema (falso positivo innocuo: fa solo una richiesta in più col crawler UA).
+        assert _title_matches_hostname(
+            "Wikipedia - Enciclopedia libera", "it.wikipedia.org"
+        )

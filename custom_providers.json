@@ -1,0 +1,76 @@
+{
+  "providers": {
+    "google": {
+      "urlPattern": "^https?:\\/\\/(?:[a-z0-9-]+\\.)*?google(?:\\.[a-z]{2,}){1,}",
+      "rules": [
+        "kgs",
+        "shem",
+        "shndl",
+        "client",
+        "sclient",
+        "oe"
+      ]
+    },
+    "youtube": {
+      "urlPattern": "^https?:\\/\\/(?:[a-z0-9-]+\\.)*?(youtube\\.com|youtu\\.be)",
+      "rules": [
+        "is",
+        "ab_channel",
+        "feature"
+      ]
+    },
+    "instagram": {
+      "urlPattern": "^https?:\\/\\/(?:[a-z0-9-]+\\.)*?instagram\\.com",
+      "rules": [
+        "stkn",
+        "igsh",
+        "igshid",
+        "igsi"
+      ]
+    },
+    "facebook-messenger": {
+      "urlPattern": "^https?:\\/\\/(?:[a-z0-9-]+\\.)*?(facebook\\.com|fb\\.com|messenger\\.com|m\\.me)",
+      "rules": [
+        "mibextid"
+      ]
+    },
+    "threads": {
+      "urlPattern": "^https?:\\/\\/(?:[a-z0-9-]+\\.)*?(threads\\.net|threads\\.com)",
+      "rules": [
+        "xmt"
+      ]
+    },
+    "alibaba": {
+      "urlPattern": "^https?:\\/\\/(?:[a-z0-9-]+\\.)*?(taobao\\.com|tmall\\.com|aliexpress\\.com|1688\\.com)",
+      "rules": [
+        "spm"
+      ]
+    },
+    "tiktok": {
+      "urlPattern": "^https?:\\/\\/(?:[a-z0-9-]+\\.)*?tiktok\\.com",
+      "rules": [
+        "sender_device",
+        "is_from_webapp"
+      ]
+    },
+    "pinterest": {
+      "urlPattern": "^https?:\\/\\/(?:[a-z0-9-]+\\.)*?(pinterest(?:\\.[a-z]{2,}){1,}|pin\\.it)",
+      "rules": [
+        "pin_.*",
+        "source_pin_id"
+      ]
+    },
+    "snapchat": {
+      "urlPattern": "^https?:\\/\\/(?:[a-z0-9-]+\\.)*?snapchat\\.com",
+      "rules": [
+        "snapid"
+      ]
+    },
+    "linkedin": {
+      "urlPattern": "^https?:\\/\\/(?:[a-z0-9-]+\\.)*?linkedin\\.com",
+      "rules": [
+        "lipi"
+      ]
+    }
+  }
+}

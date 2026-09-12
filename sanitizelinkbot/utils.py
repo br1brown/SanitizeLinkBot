@@ -22,6 +22,9 @@ BASE_DIR = (
 )
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 KEYS_PATH = os.path.join(PROJECT_ROOT, "keys.json")
+# Regole per-dominio mantenute dal progetto, stesso formato "provider" di ClearURLs
+# (urlPattern + rules). File statico, non toccato dagli aggiornamenti di ClearURLs.
+CUSTOM_PROVIDERS_PATH = os.path.join(PROJECT_ROOT, "custom_providers.json")
 TOKEN_PATH = os.path.join(PROJECT_ROOT, "token.txt")
 
 # Il file viene creato al primo aggiornamento mensile; se mancante il layer ClearURLs è disabilitato

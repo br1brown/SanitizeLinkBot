@@ -7,6 +7,7 @@ from __future__ import annotations
 # da link wrapper. Questo modulo compila quel JSON in strutture ottimizzate per lookup rapido.
 
 import asyncio
+import itertools
 import json
 import os
 import re
@@ -124,23 +125,19 @@ def _compile_provider(name: str, raw: dict) -> Optional[ProviderRules]:
     )
 
 
-def _compile_index(data: dict) -> ClearUrlsIndex:
-    """Compila il JSON ClearURLs in un ClearUrlsIndex.
+def _compile_index(providers_items) -> ClearUrlsIndex:
+    """Compila coppie (nome, provider) ClearURLs in un ClearUrlsIndex.
 
-    I provider vengono separati in due gruppi:
-      - specifici  (urlPattern con \\. → ancora su dominio reale): testati prima
-      - universali (urlPattern senza \\. → pattern generico come .*): testati dopo
-
-    L'ordinamento garantisce che regole dominio-specifiche abbiano priorità su quelle globali
-    (es. le regole Amazon devono essere applicate prima di globalRules).
-    La classificazione usa una semplice ricerca di stringa sul pattern compilato:
-    nessun parsing di regex, nessuna euristica fragile.
+    I provider vengono separati in due gruppi, specifici prima e universali dopo:
+    "specifici" = urlPattern ancorato su un dominio reale (contiene \\.), "universali"
+    = pattern generico (es. globalRules con .*). La classificazione è una ricerca di
+    stringa sul pattern compilato, non un parsing di regex.
     """
     specific: list[ProviderRules] = []
     universal: list[ProviderRules] = []
     count_skipped = 0
 
-    for name, raw in data.get("providers", {}).items():
+    for name, raw in providers_items:
         provider = _compile_provider(name, raw)
         if provider is None:
             count_skipped += 1
@@ -170,30 +167,68 @@ class ClearUrlsLoader:
     I reload usano asyncio.Lock per evitare due aggiornamenti concorrenti.
     """
 
-    def __init__(self, rules_path: Path) -> None:
+    def __init__(
+        self, rules_path: Path, custom_providers_path: Optional[Path] = None
+    ) -> None:
         self._rules_path = rules_path
+        self._custom_providers_path = custom_providers_path
         self._index: Optional[ClearUrlsIndex] = None  # None finché non è caricato
         # Lock solo per il reload: evita due download/compilazioni sovrapposti
         self._reload_lock = asyncio.Lock()
 
-    def load_sync(self) -> None:
-        """Caricamento sincrono all'avvio, prima che il loop asyncio sia attivo.
-        Se il file manca, il loader resta non caricato: il bot parte con solo keys.json.
+    def _load_custom_providers(self) -> dict:
+        """Carica custom_providers.json: provider mantenuti dal progetto, stesso formato
+        di ClearURLs (urlPattern + rules), per parametri legati a un dominio preciso.
+        File opzionale e statico: un errore qui non blocca il caricamento delle regole ClearURLs.
         """
-        if not self._rules_path.exists():
-            logger.warning(
-                "File delle regole ClearURLs non trovato in %s — layer disabilitato fino al primo download",
-                self._rules_path,
-            )
-            return
+        if not self._custom_providers_path or not self._custom_providers_path.exists():
+            return {}
         try:
-            data = json.loads(self._rules_path.read_text(encoding="utf-8"))
-            self._index = _compile_index(data)
-            logger.info("Regole ClearURLs caricate da %s", self._rules_path)
+            raw = json.loads(self._custom_providers_path.read_text(encoding="utf-8"))
+            providers = raw.get("providers", {})
+            if not isinstance(providers, dict):
+                raise ValueError("la chiave 'providers' non è un oggetto")
+            return providers
         except Exception as exc:
             logger.error(
-                "Caricamento delle regole ClearURLs dal disco fallito: %s", exc
+                "Caricamento di custom_providers.json fallito (ignorato): %s", exc
             )
+            return {}
+
+    def _build_index(self, data: dict) -> ClearUrlsIndex:
+        """Compila insieme i provider scaricati da ClearURLs e quelli custom del progetto.
+        Le due fonti restano coppie (nome, provider) separate fino alla compilazione: un
+        nome custom uguale a un nome ufficiale si somma alle sue regole invece di sostituirle.
+        """
+        official_items = data.get("providers", {}).items()
+        custom_items = self._load_custom_providers().items()
+        return _compile_index(itertools.chain(official_items, custom_items))
+
+    def load_sync(self) -> None:
+        """Caricamento sincrono all'avvio, prima che il loop asyncio sia attivo.
+        Se il file delle regole scaricate manca, l'indice si compila comunque con le
+        sole regole custom del progetto: is_loaded resta True fin da subito.
+        """
+        data: dict = {}
+        if self._rules_path.exists():
+            try:
+                data = json.loads(self._rules_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                logger.error(
+                    "Caricamento delle regole ClearURLs dal disco fallito: %s", exc
+                )
+        else:
+            logger.warning(
+                "File delle regole ClearURLs non trovato in %s — uso solo le regole custom fino al primo download",
+                self._rules_path,
+            )
+        try:
+            self._index = self._build_index(data)
+            logger.info(
+                "Regole caricate (%d provider)", len(self._index.providers)
+            )
+        except Exception as exc:
+            logger.error("Costruzione dell'indice delle regole fallita: %s", exc)
 
     async def reload_async(self) -> bool:
         """Ricarica dal disco in modo asincrono. File I/O in thread pool per non bloccare il loop.
@@ -207,7 +242,7 @@ class ClearUrlsLoader:
                     None,
                     lambda: self._rules_path.read_text(encoding="utf-8"),
                 )
-                new_index = _compile_index(json.loads(text))
+                new_index = self._build_index(json.loads(text))
                 self._index = new_index  # swap atomico: le coroutine in corso vedono o vecchio o nuovo, mai intermedio
                 logger.info("Regole ClearURLs ricaricate correttamente")
                 return True

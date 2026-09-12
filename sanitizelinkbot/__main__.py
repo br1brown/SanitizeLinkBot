@@ -21,6 +21,7 @@ from .utils import (
     load_json_file,
     KEYS_PATH,
     CLEARURLS_PATH,
+    CUSTOM_PROVIDERS_PATH,
     DEBOUNCE_PATH,
     PROJECT_ROOT,
 )
@@ -75,7 +76,9 @@ KEYS = load_json_file(KEYS_PATH)
 # ClearURLs: caricamento sincrono all'avvio (il loop asyncio non è ancora attivo).
 # Se il file manca, il loader resta in stato "non caricato" e viene ignorato dalla pipeline.
 # Il file viene scaricato dal task monthly_updater al primo giro (~5 minuti dopo l'avvio).
-_clearurls_loader = ClearUrlsLoader(Path(CLEARURLS_PATH))
+_clearurls_loader = ClearUrlsLoader(
+    Path(CLEARURLS_PATH), custom_providers_path=Path(CUSTOM_PROVIDERS_PATH)
+)
 _clearurls_loader.load_sync()
 
 # Debounce (Brave): stesso schema di caricamento di ClearURLs, layer complementare
