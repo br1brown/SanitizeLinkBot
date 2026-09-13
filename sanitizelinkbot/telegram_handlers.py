@@ -188,7 +188,24 @@ class TelegramHandlers:
     # --- SETTINGS ---
 
     def _flag(self, enabled: bool) -> str:
-        return "🟢" if enabled else "🔴"
+        return "🟢 ON" if enabled else "🔴 OFF"
+
+    _SETTINGS_LABELS = [
+        ("show_url", "URL in chiaro"),
+        ("show_title", "Titolo pagina"),
+        ("use_privacy_frontend", "Frontend alt. [beta]"),
+        ("show_preview", "Anteprima link"),
+    ]
+    _GROUP_SETTINGS_LABEL = ("group_auto", "Modalità auto")
+
+    def _build_settings_summary(self, prefs, is_group: bool) -> str:
+        """Riepilogo dello stato attuale di ogni impostazione, una per riga con spazio tra loro."""
+        rows = list(self._SETTINGS_LABELS)
+        if is_group:
+            rows.append(self._GROUP_SETTINGS_LABEL)
+        return "\n\n".join(
+            f"{label}: {self._flag(getattr(prefs, key))}" for key, label in rows
+        )
 
     def _build_settings_keyboard(
         self, prefs, is_group: bool = False
@@ -239,7 +256,8 @@ class TelegramHandlers:
             is_group = chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
             prefs = ChatPrefs.get(chat.id)
             text = render_from_file(
-                "settings_group" if is_group else "settings_private"
+                "settings_group" if is_group else "settings_private",
+                table=self._build_settings_summary(prefs, is_group),
             )
             await update.message.reply_text(
                 text,
@@ -267,15 +285,14 @@ class TelegramHandlers:
 
             if key == "close":
                 prefs = ChatPrefs.get(chat_id)
-                summary = (
-                    f"⚙️ <b>Impostazioni aggiornate</b>\n"
-                    f"URL in chiaro {self._flag(prefs.show_url)}  "
-                    f"Titolo {self._flag(prefs.show_title)}  "
-                    f"Frontend alt. {self._flag(prefs.use_privacy_frontend)}  "
-                    f"Anteprima {self._flag(prefs.show_preview)}"
+                is_group = query.message.chat.type in (
+                    ChatType.GROUP,
+                    ChatType.SUPERGROUP,
                 )
-                if query.message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
-                    summary += f"  Modalità auto {self._flag(prefs.group_auto)}"
+                summary = (
+                    "⚙️ <b>Impostazioni aggiornate</b>\n\n"
+                    + self._build_settings_summary(prefs, is_group)
+                )
                 await query.edit_message_text(
                     summary, parse_mode=ParseMode.HTML, reply_markup=None
                 )
@@ -291,8 +308,15 @@ class TelegramHandlers:
                     ChatType.GROUP,
                     ChatType.SUPERGROUP,
                 )
-                await query.edit_message_reply_markup(
-                    reply_markup=self._build_settings_keyboard(prefs, is_group)
+                text = render_from_file(
+                    "settings_group" if is_group else "settings_private",
+                    table=self._build_settings_summary(prefs, is_group),
+                )
+                await query.edit_message_text(
+                    text,
+                    parse_mode=ParseMode.HTML,
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
+                    reply_markup=self._build_settings_keyboard(prefs, is_group),
                 )
 
         except Exception as exc:

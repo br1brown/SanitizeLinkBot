@@ -1,4 +1,4 @@
-python-telegram-bot>=20
+python-telegram-bot>=21.3  # richiesto per l'entità expandable_blockquote (Bot API 7.4) usata in /settings
 aiohttp>=3.9
 certifi
 tldextract>=5.0
