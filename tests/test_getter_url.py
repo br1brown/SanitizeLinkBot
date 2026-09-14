@@ -1,5 +1,7 @@
 """Test per GetterUrl: estrazione URL da entità Telegram e da testo libero."""
 
+from types import SimpleNamespace
+
 from telegram import MessageEntity
 from sanitizelinkbot.getter_url import GetterUrl
 
@@ -44,3 +46,85 @@ class TestUrlsFromEntities:
     def test_no_entities_returns_empty(self):
         assert GetterUrl.urls_from_entities("qualsiasi testo", None) == []
         assert GetterUrl.urls_from_entities(None, []) == []
+
+
+def _message(text=None, entities=None, caption=None, caption_entities=None):
+    """Oggetto minimale con gli stessi attributi di un telegram.Message."""
+    return SimpleNamespace(
+        text=text, entities=entities, caption=caption, caption_entities=caption_entities
+    )
+
+
+class TestExtractUrls:
+    def test_none_or_empty_text_returns_empty(self):
+        assert GetterUrl.extract_urls(None) == []
+        assert GetterUrl.extract_urls("") == []
+
+    def test_https_url_in_free_text(self):
+        assert GetterUrl.extract_urls("guarda qui: https://example.com/page") == [
+            "https://example.com/page"
+        ]
+
+    def test_bare_domain_without_protocol(self):
+        # niente "https://": deve comunque riconoscere un dominio nudo con path
+        assert GetterUrl.extract_urls("vai su example.com/articolo") == [
+            "example.com/articolo"
+        ]
+
+    def test_www_prefixed_url(self):
+        assert GetterUrl.extract_urls("www.example.com/page") == ["www.example.com/page"]
+
+    def test_multiple_urls_in_same_text(self):
+        text = "prima https://a.com poi https://b.com"
+        assert GetterUrl.extract_urls(text) == ["https://a.com", "https://b.com"]
+
+    def test_email_address_not_matched_as_url(self):
+        # il lookbehind negativo (?<![\w@]) esclude il dominio dopo la "@" di una email
+        assert GetterUrl.extract_urls("scrivimi a mario@example.com") == []
+
+
+class TestUrlsFromMessage:
+    def test_prefers_entities_over_regex(self, monkeypatch):
+        message = _message(text="testo", entities=["fake-entity"])
+        monkeypatch.setattr(
+            GetterUrl, "urls_from_entities", lambda text, entities: ["https://from-entity.example"]
+        )
+        assert GetterUrl.urls_from_message(message) == ["https://from-entity.example"]
+
+    def test_combines_text_and_caption_entities(self, monkeypatch):
+        message = _message(
+            text="t", entities=["e1"], caption="c", caption_entities=["e2"]
+        )
+        mapping = {
+            ("t", ("e1",)): ["https://text.example"],
+            ("c", ("e2",)): ["https://caption.example"],
+        }
+
+        def fake_urls_from_entities(text, entities):
+            return mapping.get((text, tuple(entities) if entities else ()), [])
+
+        monkeypatch.setattr(GetterUrl, "urls_from_entities", fake_urls_from_entities)
+        assert GetterUrl.urls_from_message(message) == [
+            "https://text.example",
+            "https://caption.example",
+        ]
+
+    def test_deduplicates_preserving_order(self, monkeypatch):
+        message = _message(text="t", entities=["e"])
+        monkeypatch.setattr(
+            GetterUrl,
+            "urls_from_entities",
+            lambda text, entities: ["https://dup.example", "https://dup.example"],
+        )
+        assert GetterUrl.urls_from_message(message) == ["https://dup.example"]
+
+    def test_falls_back_to_regex_when_no_entities(self):
+        message = _message(text="link: https://regex-fallback.example/x")
+        assert GetterUrl.urls_from_message(message) == ["https://regex-fallback.example/x"]
+
+    def test_falls_back_to_regex_on_caption_when_no_entities(self):
+        message = _message(caption="vedi https://caption-fallback.example")
+        assert GetterUrl.urls_from_message(message) == ["https://caption-fallback.example"]
+
+    def test_no_text_no_caption_returns_empty(self):
+        assert GetterUrl.urls_from_message(_message()) == []

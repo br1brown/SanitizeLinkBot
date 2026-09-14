@@ -38,7 +38,7 @@ class TestCustomProvidersWithoutDownloadedRules:
         assert "shem" not in cleaned
         assert "shndl" not in cleaned
         assert "kgs=" not in cleaned
-        assert "kgmid=" in cleaned
+        assert "kgmid=" not in cleaned
         assert "q=Joe" in cleaned
 
     def test_google_client_identifier_params_removed(self, tmp_path):
