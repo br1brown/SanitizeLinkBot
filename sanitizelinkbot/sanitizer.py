@@ -152,8 +152,16 @@ def _title_matches_hostname(title: str | None, domain_no_www: str) -> bool:
     if _contenuto_nell_host(titolo_norm):
         return True
 
-    primo_segmento = _RE_TITLE_SEPARATOR.split(titolo_norm, maxsplit=1)[0].strip()
-    return primo_segmento != titolo_norm and _contenuto_nell_host(primo_segmento)
+    segmenti = _RE_TITLE_SEPARATOR.split(titolo_norm, maxsplit=1)
+    if len(segmenti) < 2:
+        return False
+    primo_segmento, resto = segmenti[0].strip(), segmenti[1].strip()
+    if primo_segmento:
+        return _contenuto_nell_host(primo_segmento)
+
+    # Titolo tipo "- YouTube": nessun contenuto prima del separatore, solo il nome
+    # del sito dopo. Ancora più chiaramente un placeholder di "Brand - tagline".
+    return _contenuto_nell_host(resto)
 
 
 def _extract_consent_continue(url: str) -> str | None:

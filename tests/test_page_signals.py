@@ -400,6 +400,13 @@ class TestTitleMatchesHostname:
             "Python (programming language) - Wikipedia", "en.wikipedia.org"
         )
 
+    def test_empty_content_before_dash_matches(self):
+        # YouTube (e altri siti che popolano <title> via JS) a volte rispondono con
+        # "- YouTube": nessun titolo video prima del separatore, solo il brand dopo.
+        # Deve scattare come placeholder per attivare il fallback crawler UA.
+        assert _title_matches_hostname("- YouTube", "youtube.com")
+        assert _title_matches_hostname("- YouTube", "www.youtube.com")
+
     def test_homesite_tagline_is_an_accepted_tradeoff(self):
         # Compromesso accettato: allargando il controllo per beccare "Brand - tagline"
         # sui siti-app JS, scatta anche su siti normali la cui homepage usa lo stesso
