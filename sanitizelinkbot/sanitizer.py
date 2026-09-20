@@ -152,8 +152,16 @@ def _title_matches_hostname(title: str | None, domain_no_www: str) -> bool:
     if _contenuto_nell_host(titolo_norm):
         return True
 
-    primo_segmento = _RE_TITLE_SEPARATOR.split(titolo_norm, maxsplit=1)[0].strip()
-    return primo_segmento != titolo_norm and _contenuto_nell_host(primo_segmento)
+    segmenti = _RE_TITLE_SEPARATOR.split(titolo_norm, maxsplit=1)
+    if len(segmenti) < 2:
+        return False
+    primo_segmento, resto = segmenti[0].strip(), segmenti[1].strip()
+    if primo_segmento:
+        return _contenuto_nell_host(primo_segmento)
+
+    # Titolo tipo "- YouTube": nessun contenuto prima del separatore, solo il nome
+    # del sito dopo. Ancora più chiaramente un placeholder di "Brand - tagline".
+    return _contenuto_nell_host(resto)
 
 
 def _extract_consent_continue(url: str) -> str | None:
@@ -556,30 +564,64 @@ class PageSignals:
                         og_url = urljoin(final_url, match_ogurl.group(1).strip())
 
                     # Titolo: <title> è preferito; og:title e twitter:title sono fallback
-                    # per siti che popolano il <title> via JavaScript (vuoto nel HTML statico)
-                    for title_pattern in (_RE_TITLE, _RE_OGTITLE, _RE_TWTITLE):
-                        if titolo_pagina:
-                            break
+                    # per siti che popolano il <title> via JavaScript (vuoto nel HTML statico).
+                    # Estraiamo tutti e tre (non ci fermiamo al primo trovato): se <title> è
+                    # solo un placeholder, og:title/twitter:title sono spesso già nello stesso
+                    # head_text (i social crawler li leggono senza eseguire JS) ed evitano una
+                    # seconda richiesta di rete.
+                    titoli_per_fonte: dict[str, str] = {}
+                    for chiave, title_pattern in (
+                        ("title", _RE_TITLE),
+                        ("og", _RE_OGTITLE),
+                        ("tw", _RE_TWTITLE),
+                    ):
                         match_title = title_pattern.search(head_text)
                         if match_title:
-                            titolo_pagina = PageSignals._normalize_title(
+                            normalizzato = PageSignals._normalize_title(
                                 match_title.group(1)
                             )
+                            if normalizzato:
+                                titoli_per_fonte[chiave] = normalizzato
+                    titolo_pagina = titoli_per_fonte.get("title") or titoli_per_fonte.get(
+                        "og"
+                    ) or titoli_per_fonte.get("tw")
 
                     # Titolo che è solo il nome del sito stesso: placeholder, non contenuto
-                    # reale (vedi _title_matches_hostname sopra). Un secondo GET con lo
-                    # User-Agent di un bot di anteprima recupera il titolo vero, senza
-                    # servizi esterni né dipendere dall'esecuzione di JavaScript.
+                    # reale (vedi _title_matches_hostname sopra).
                     if opts.show_title:
                         domain_no_www = re.sub(
                             r"^www\.", "", urlsplit(final_url).netloc, flags=re.IGNORECASE
                         ).lower()
                         if _title_matches_hostname(titolo_pagina, domain_no_www):
-                            crawler_title = await PageSignals._fetch_title_with_crawler_ua(
-                                final_url, sanita
+                            # Primo tentativo: le fonti alternative già scaricate in questa
+                            # stessa risposta, senza ulteriori richieste di rete.
+                            alternativa = next(
+                                (
+                                    candidato
+                                    for candidato in (
+                                        titoli_per_fonte.get("og"),
+                                        titoli_per_fonte.get("tw"),
+                                    )
+                                    if candidato
+                                    and not _title_matches_hostname(
+                                        candidato, domain_no_www
+                                    )
+                                ),
+                                None,
                             )
-                            if crawler_title:
-                                titolo_pagina = crawler_title
+                            if alternativa:
+                                titolo_pagina = alternativa
+                            else:
+                                # Ultima spiaggia: un secondo GET con lo User-Agent di un bot
+                                # di anteprima recupera il titolo vero, senza servizi esterni
+                                # né dipendere dall'esecuzione di JavaScript.
+                                crawler_title = (
+                                    await PageSignals._fetch_title_with_crawler_ua(
+                                        final_url, sanita
+                                    )
+                                )
+                                if crawler_title:
+                                    titolo_pagina = crawler_title
 
                     # Meta-refresh e redirect JavaScript: aiohttp non li segue (non è un browser).
                     # Stesso guard _depth == 0: massimo 1 hop aggiuntivo per evitare loop.
