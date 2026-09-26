@@ -122,8 +122,7 @@ async def main() -> None:
     application.add_handler(CommandHandler("help", handlers.cmd_help))
     application.add_handler(CommandHandler("sanifica", handlers.cmd_sanifica))
     application.add_handler(CommandHandler("alternative", handlers.cmd_alternative))
-    if CONFIG.urlscan_api_key:
-        application.add_handler(CommandHandler("scan", handlers.cmd_scan))
+    application.add_handler(CommandHandler("scan", handlers.cmd_scan))
 
     # group=1: questi handler non interferiscono con i CommandHandler sopra (group=0 di default)
     application.add_handler(
@@ -181,23 +180,14 @@ async def main() -> None:
             ", ".join(missing_flags),
         )
 
-    if not CONFIG.urlscan_api_key:
-        logger.warning(
-            "URLSCAN_API_KEY non configurata: il comando /scan non sarà disponibile"
-        )
-
     bot_commands = [
         BotCommand("start", "Messaggio di benvenuto"),
         BotCommand("help", "Come usare il bot"),
         BotCommand("sanifica", "Pulisci i link in un messaggio (in risposta)"),
+        BotCommand("scan", "Analizza un URL con ScanMalware (servizio esterno)"),
         BotCommand("settings", "Impostazioni della chat"),
         BotCommand("alternative", "Frontend alternativi supportati"),
     ]
-    if CONFIG.urlscan_api_key:
-        bot_commands.insert(
-            3,  # dopo /sanifica, prima di /settings
-            BotCommand("scan", "Analizza un URL con urlscan.io — scansione pubblica"),
-        )
     await application.bot.set_my_commands(bot_commands)
 
     try:

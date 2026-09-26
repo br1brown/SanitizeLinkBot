@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-09-25
+
+### `/scan` ora usa ScanMalware.com al posto di urlscan.io
+
+- Il comando `/scan` non richiede più alcuna API key né account: l'API di [ScanMalware.com](https://scanmalware.com) è anonima. `/scan` è quindi **sempre attivo**.
+- La variabile `URLSCAN_API_KEY` non è più letta. Al suo posto esiste `SCANMALWARE_API_KEY`, **opzionale**: serve solo ad alzare il rate limit (600 → 3000 richieste/minuto), non a sbloccare il comando.
+- La risposta include il verdetto di sicurezza (malevolo / rischio alto / sospetto / nessuna minaccia) con punteggio di rischio e i principali fattori di rischio, lo screenshot della pagina (sotto spoiler) e il link al report completo.
+- Le scansioni sono inviate come **unlisted** (prima, con urlscan, erano pubbliche): non compaiono nella ricerca, negli elenchi né nei feed di ScanMalware, ma il report resta visibile a chi ha il link e l'URL è comunque conservato dal servizio (nessuna politica di retention dichiarata). Per questo `/scan` è ora **disattivato di default** e si abilita per chat da `/settings` → **Scan esterno** (nuova preferenza `scan_enabled`, migrazione automatica del DB): in un gruppo nessuno può mandare a un servizio terzo un link riservato postato da altri senza che la chat l'abbia scelto.
+- Il verdetto viene calcolato da ScanMalware dopo la cattura della pagina: il bot attende fino a 2 minuti; se il verdetto non è ancora pronto risponde comunque con il link al report.
+
 ## 2026-09-02
 
 ### ⚠️ Azione richiesta per chi ha già un deploy Docker in produzione

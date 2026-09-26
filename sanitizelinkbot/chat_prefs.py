@@ -13,7 +13,14 @@ os.makedirs(_DATA_DIR, exist_ok=True)
 _DB_PATH = os.path.join(_DATA_DIR, "chat_prefs.db")
 
 PREF_KEYS = frozenset(
-    {"show_title", "show_url", "use_privacy_frontend", "group_auto", "show_preview"}
+    {
+        "show_title",
+        "show_url",
+        "use_privacy_frontend",
+        "group_auto",
+        "show_preview",
+        "scan_enabled",
+    }
 )
 _VALID_KEYS = PREF_KEYS
 
@@ -42,6 +49,11 @@ class PrefsEntry:
     use_privacy_frontend: bool
     group_auto: bool
     show_preview: bool
+    # /scan invia l'URL a un servizio esterno (ScanMalware) che lo conserva e ne espone il report
+    # a chiunque abbia il link (scansione "unlisted": fuori da ricerca ed elenchi, ma non privata).
+    # Va abilitato esplicitamente per chat: in un gruppo nessuno deve poter mandare fuori
+    # un link altrui (es. inviti privati) senza il consenso della chat.
+    scan_enabled: bool = False
 
     @classmethod
     def from_defaults(cls) -> PrefsEntry:
@@ -51,6 +63,7 @@ class PrefsEntry:
             use_privacy_frontend=False,
             group_auto=False,
             show_preview=True,
+            scan_enabled=False,
         )
 
 
@@ -62,7 +75,9 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
-_SELECT_COLS = "show_title, show_url, translate_url, group_auto, show_preview"
+_SELECT_COLS = (
+    "show_title, show_url, translate_url, group_auto, show_preview, scan_enabled"
+)
 
 
 def _row_to_entry(row: sqlite3.Row) -> PrefsEntry:
@@ -72,6 +87,7 @@ def _row_to_entry(row: sqlite3.Row) -> PrefsEntry:
         use_privacy_frontend=bool(row["translate_url"]),
         group_auto=bool(row["group_auto"]),
         show_preview=bool(row["show_preview"]),
+        scan_enabled=bool(row["scan_enabled"]),
     )
 
 
@@ -97,6 +113,10 @@ def _init_db() -> None:
         if "show_preview" not in existing_cols:
             conn.execute(
                 "ALTER TABLE chat_prefs ADD COLUMN show_preview INTEGER NOT NULL DEFAULT 1"
+            )
+        if "scan_enabled" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE chat_prefs ADD COLUMN scan_enabled INTEGER NOT NULL DEFAULT 0"
             )
     logger.info("Database SQLite pronto in %s", _DB_PATH)
 

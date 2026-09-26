@@ -22,6 +22,7 @@ from .sanitizer import Sanitizer
 from .getter_url import GetterUrl
 from .telegram_io import TelegramIO
 from .chat_prefs import ChatPrefs, PREF_KEYS, SanitizerOpts
+from .scanmalware_client import summarize_verdict
 
 
 class TelegramHandlers:
@@ -195,6 +196,7 @@ class TelegramHandlers:
         ("show_title", "Titolo pagina"),
         ("use_privacy_frontend", "Frontend alt. [beta]"),
         ("show_preview", "Anteprima link"),
+        ("scan_enabled", "Scan esterno (/scan)"),
     ]
     _GROUP_SETTINGS_LABEL = ("group_auto", "Modalità auto")
 
@@ -233,6 +235,12 @@ class TelegramHandlers:
                 InlineKeyboardButton(
                     f"Anteprima link {self._flag(prefs.show_preview)}",
                     callback_data="toggle:show_preview",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    f"Scan esterno (/scan) {self._flag(prefs.scan_enabled)}",
+                    callback_data="toggle:scan_enabled",
                 )
             ],
         ]
@@ -323,12 +331,63 @@ class TelegramHandlers:
             logger.error("Impossibile cambiare l'impostazione: %s", exc)
             await query.answer("Errore nell'aggiornamento", show_alert=True)
 
+    _SCAN_VERDICT_LINES = {
+        "malicious": "🔴 <b>Malevolo</b>",
+        "high": "🔴 <b>Rischio alto</b>",
+        "medium": "⚠️ <b>Sospetto</b>",
+        "low": "✅ <b>Nessuna minaccia rilevata</b>",
+        "unknown": "⏳ <b>Verdetto non ancora disponibile</b>",
+    }
+
+    @classmethod
+    def _format_scan_report(cls, summary: dict, report_url: str) -> str:
+        """Testo HTML del verdetto a partire dal riepilogo ScanMalware (usato anche come caption)."""
+        info = summarize_verdict(summary)
+        lines = [cls._SCAN_VERDICT_LINES[info["level"]]]
+        if info["label"] and info["level"] != "unknown":
+            row = html.escape(info["label"])
+            if info["score"] is not None:
+                row += f" — punteggio di rischio {info['score']}/100"
+            lines.append(row)
+        if info["final_url"]:
+            lines.append(f"<code>{html.escape(info['final_url'])}</code>")
+        details = []
+        if info["redirect_count"]:
+            details.append(f"redirect: {info['redirect_count']}")
+        if info["tracker_count"]:
+            details.append(f"tracker: {info['tracker_count']}")
+        if info["certificate_valid"] is False:
+            details.append("certificato TLS non valido")
+        if details:
+            lines.append(", ".join(details).capitalize())
+        for factor in info["risk_factors"][:3]:
+            lines.append(f"• {html.escape(factor[:160])}")
+        if info["level"] == "unknown":
+            lines.append("L'analisi di sicurezza è ancora in corso: riprova tra qualche minuto sul report.")
+        lines.append(f'\n<a href="{report_url}">Report completo →</a>')
+        return "\n".join(lines)
+
     async def cmd_scan(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """/scan [url] — analizza un URL con urlscan.io e restituisce screenshot e report."""
+        """/scan [url] — analizza un URL con ScanMalware.com e restituisce verdetto, screenshot e report."""
         message = update.effective_message
         if not message:
+            return
+
+        # Opt-in per chat: la scansione manda l'URL a un servizio esterno che lo conserva
+        # ed espone il report a chi ha il link, quindi deve averlo scelto la chat (in un
+        # gruppo: chiunque potrebbe altrimenti "scannare" un link privato postato da un altro)
+        chat = update.effective_chat
+        if chat is None or not ChatPrefs.get(chat.id).scan_enabled:
+            await message.reply_text(
+                "🔒 <code>/scan</code> è disattivato in questa chat.\n"
+                "La scansione invia l'URL a <b>ScanMalware.com</b>, un servizio esterno che lo conserva: "
+                "attivala da <code>/settings</code> → <b>Scan esterno</b> se per questa chat va bene.",
+                parse_mode=ParseMode.HTML,
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
+                do_quote=True,
+            )
             return
 
         # URL dagli argomenti del comando o dal messaggio citato
@@ -350,87 +409,70 @@ class TelegramHandlers:
             )
             return
 
-        # Il client urlscan viene inizializzato lazy al primo _get_session()
-        urlscan = self.sanitizer.urlscan
-        if urlscan is None:
+        # Il client viene inizializzato lazy al primo _get_session()
+        client = self.sanitizer.scanmalware
+        if client is None:
             await self.sanitizer._get_session()
-            urlscan = self.sanitizer.urlscan
-        if urlscan is None:
-            await message.reply_text(
-                "Il comando /scan non è disponibile: configura <code>URLSCAN_API_KEY</code> nel file env.",
-                parse_mode=ParseMode.HTML,
-                do_quote=True,
-            )
-            return
+            client = self.sanitizer.scanmalware
 
         notice = await message.reply_text(
-            "🔍 Analisi in corso tramite <b>urlscan.io</b> (servizio esterno).\n"
-            "La scansione è <b>pubblica</b>: l'URL sarà visibile su urlscan.io.",
+            "🔍 Analisi in corso tramite <b>ScanMalware.com</b> (servizio esterno).\n"
+            "L'URL viene inviato al servizio; il report non è indicizzato ma resta visibile a chi ha il link.\n"
+            "Può richiedere un paio di minuti.",
             parse_mode=ParseMode.HTML,
             link_preview_options=LinkPreviewOptions(is_disabled=True),
             do_quote=True,
         )
 
-        uuid = await urlscan.submit_scan(target_url, visibility="public")
-        if not uuid:
+        scan_id = await client.submit_scan(target_url)
+        if not scan_id:
             await notice.edit_text("Impossibile avviare la scansione. Riprova più tardi.")
             return
 
-        result = await urlscan.wait_for_result(uuid)
-        report_url = f"https://urlscan.io/result/{uuid}/"
+        report_url = client.report_url(scan_id)
+        summary = await client.wait_for_result(scan_id)
 
-        if not result:
+        if summary is None:
             await notice.edit_text(
-                f"La scansione è ancora in corso.\nConsulta il report quando sarà pronto: {report_url}"
+                f"La scansione non è riuscita o è ancora in coda.\nConsulta il report: {report_url}",
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
             )
             return
 
-        overall = (result.get("verdicts") or {}).get("overall", {})
-        is_malicious = overall.get("malicious", False)
-        score = overall.get("score", 0)
-        tags = overall.get("tags") or []
-        categories = overall.get("categories") or []
+        verdict_text = self._format_scan_report(summary, report_url)
 
-        engines = (result.get("verdicts") or {}).get("engines", {})
-        engines_malicious = engines.get("malicious", 0)
-        engines_total = engines.get("enginesTotal", 0)
+        # Screenshot come foto con il verdetto in didascalia; se non c'è, solo testo
+        screenshot = await client.fetch_screenshot(scan_id)
+        sent_as_photo = False
+        if screenshot:
+            try:
+                await message.reply_photo(
+                    photo=screenshot,
+                    caption=verdict_text,
+                    parse_mode=ParseMode.HTML,
+                    has_spoiler=True,  # la pagina potrebbe essere sgradevole: l'utente sceglie se vederla
+                    do_quote=True,
+                )
+                sent_as_photo = True
+            except Exception as exc:
+                logger.warning("Invio screenshot fallito, ripiego sul testo: %s", exc)
 
-        page = result.get("page") or {}
-        domain = page.get("domain", "")
-        page_title = page.get("title", "")
-
-        stats_malicious = (result.get("stats") or {}).get("malicious", 0)
-
-        if is_malicious:
-            verdict_line = "🔴 <b>Malevolo</b>"
-        elif score > 0 or stats_malicious > 0:
-            verdict_line = "⚠️ <b>Sospetto</b>"
+        if sent_as_photo:
+            try:
+                await notice.delete()
+            except Exception:
+                pass
         else:
-            verdict_line = "✅ <b>Nessuna minaccia rilevata</b>"
+            await notice.edit_text(
+                verdict_text,
+                parse_mode=ParseMode.HTML,
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
+            )
 
-        lines = [verdict_line]
-        if domain:
-            row = f"<code>{html.escape(domain)}</code>"
-            if page_title:
-                row += f" — {html.escape(page_title)}"
-            lines.append(row)
-        if engines_total > 0:
-            lines.append(f"Motori antivirus: {engines_malicious}/{engines_total} lo segnalano")
-        label_tags = tags + [c for c in categories if c not in tags]
-        if label_tags:
-            lines.append("Tag: " + ", ".join(html.escape(t) for t in label_tags[:5]))
-        if stats_malicious > 0:
-            lines.append(f"Risorse malevole caricate: {stats_malicious}")
-        lines.append(f'\n<a href="{report_url}">Report completo →</a>')
-
-        verdict_text = "\n".join(lines)
-        await notice.edit_text(
-            verdict_text,
-            parse_mode=ParseMode.HTML,
-            link_preview_options=LinkPreviewOptions(is_disabled=True),
+        info = summarize_verdict(summary)
+        logger.info(
+            "SCAN: scan_id=%s level=%s score=%s", scan_id, info["level"], info["score"]
         )
-
-        logger.info("SCAN: uuid=%s malicious=%s score=%s", uuid, is_malicious, score)
 
     async def cmd_start(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -449,8 +491,7 @@ class TelegramHandlers:
     ) -> None:
         bot_username = context.bot.username or ""
         text = render_from_file("help", mention_bot=f"@{bot_username}")
-        if self.sanitizer.conf.urlscan_api_key:
-            text += "\n\n" + render_from_file("scan_info")
+        text += "\n\n" + render_from_file("scan_info")
         text += '\n\nCodice sorgente: <a href="https://github.com/br1brown/SanitizeLinkBot">GitHub</a>'
         await update.message.reply_text(
             text,

@@ -28,6 +28,7 @@
     <Compile Include="sanitizelinkbot\clearurls_loader.py" />
     <Compile Include="sanitizelinkbot\getter_url.py" />
     <Compile Include="sanitizelinkbot\sanitizer.py" />
+    <Compile Include="sanitizelinkbot\scanmalware_client.py" />
     <Compile Include="sanitizelinkbot\telegram_handlers.py" />
     <Compile Include="sanitizelinkbot\telegram_io.py" />
     <Compile Include="sanitizelinkbot\url_translator.py" />
@@ -38,6 +39,7 @@
     <Compile Include="tests\test_clearurls_loader.py" />
     <Compile Include="tests\test_integration.py" />
     <Compile Include="tests\test_page_signals.py" />
+    <Compile Include="tests\test_scanmalware_client.py" />
     <Compile Include="tests\test_sanitizer_unit.py" />
     <Compile Include="tests\test_url_translator.py" />
     <Compile Include="tests\test_utils.py" />

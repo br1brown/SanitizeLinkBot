@@ -26,7 +26,7 @@ def _make_sanitizer() -> Sanitizer:
         valida_link_post_pulizia=True,
         max_unwrap_hops=3,
         max_consent_hops=3,
-        urlscan_api_key=None,
+        scanmalware_api_key=None,
         log_level="INFO",
     )
     keys = load_json_file(KEYS_PATH, required=True)

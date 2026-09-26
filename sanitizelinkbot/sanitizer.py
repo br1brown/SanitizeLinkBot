@@ -8,7 +8,7 @@ from .chat_prefs import SanitizerOpts
 from .clearurls_loader import ClearUrlsLoader
 from .debounce_loader import DebounceLoader
 from .utils import logger
-from .urlscan_client import UrlScanClient
+from .scanmalware_client import ScanMalwareClient
 from collections import OrderedDict
 from email.message import Message as _EmailMessage
 
@@ -757,7 +757,7 @@ class Sanitizer:
         self._aggressive_unsafe_ttl_sec = 6 * 3600
 
         self.TRADUCI_URL = UrlTranslator()
-        self.urlscan: UrlScanClient | None = None
+        self.scanmalware: ScanMalwareClient | None = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Sessione HTTP condivisa con SSLContext esplicito (certifi).
@@ -795,8 +795,10 @@ class Sanitizer:
                 connector=connector,
             )
 
-            if self.conf.urlscan_api_key:
-                self.urlscan = UrlScanClient(self.conf.urlscan_api_key, self._session)
+            # L'API di ScanMalware è anonima: il client c'è sempre, la chiave è facoltativa
+            self.scanmalware = ScanMalwareClient(
+                self._session, api_key=self.conf.scanmalware_api_key
+            )
 
         return self._session
 

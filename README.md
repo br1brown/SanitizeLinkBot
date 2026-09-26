@@ -4,6 +4,7 @@
 
 **SanitizeLinkBot** è un bot Telegram progettato per migliorare la qualità e la privacy dei link condivisi.
 Rimuove automaticamente i parametri di tracciamento, segue i redirect, valida i risultati e può reindirizzare verso frontend alternativi privacy-friendly.
+Con `/scan` analizza un link sospetto tramite ScanMalware.com (malware, phishing, truffe) senza bisogno di API key, se abilitato nelle impostazioni della chat.
 
 Funziona in chat private, gruppi e modalità inline.
 
@@ -42,7 +43,7 @@ Funziona in chat private, gruppi e modalità inline.
 
 * Modalità inline (`@NomeBot <link>`)
 * Utilizzo nei gruppi con modalità manuale o automatica
-* Analisi tecnica dei link tramite `/scan` (urlscan.io)
+* Analisi di sicurezza dei link tramite `/scan` (ScanMalware.com, senza API key)
 * Sistema di preferenze configurabili per chat
 
 
@@ -77,7 +78,9 @@ Comportamento in modalità automatica:
 /scan <link>
 ```
 
-Restituisce report tecnico (richiede API key urlscan.io)
+Restituisce verdetto di sicurezza, screenshot e link al report completo su ScanMalware.com. Non richiede alcuna API key.
+
+L'URL viene inviato a ScanMalware, che lo conserva. Il bot usa scansioni **unlisted**: non compaiono nella ricerca del sito, nell'elenco per dominio né nei feed, ma il report resta accessibile a chiunque abbia il link (verificato sull'API, settembre 2026). Per questo `/scan` è **disattivato di default** e va abilitato per chat da `/settings` → **Scan esterno**: in un gruppo evita che chiunque possa mandare a un servizio terzo un link riservato postato da altri.
 
 ### Altri comandi
 
@@ -87,7 +90,7 @@ Restituisce report tecnico (richiede API key urlscan.io)
 | `/help`     | Guida rapida e lista funzionalità    |
 | `/settings` | Impostazioni della chat corrente     |
 | `/sanifica` | Pulisci i link (in risposta a un messaggio) |
-| `/scan`     | Analisi tecnica tramite urlscan.io *(richiede API key)* |
+| `/scan`     | Analisi di sicurezza tramite ScanMalware.com *(da abilitare in `/settings`)* |
 
 
 ## ⚙️ Configurazione BotFather
@@ -186,7 +189,7 @@ Definisce le regole di pulizia:
 | Variabile                     | Default | Descrizione                  |
 | ----------------------------- | ------- | ---------------------------- |
 | TELEGRAM_BOT_TOKEN            | —       | Token del bot                |
-| URLSCAN_API_KEY               | —       | Abilita `/scan`              |
+| SCANMALWARE_API_KEY           | —       | Opzionale: alza il rate limit di `/scan` (che funziona anche senza) |
 | BATCH_MAX_CONCURRENCY         | 6       | Link processati in parallelo |
 | CACHE_MAX_SIZE                | 100     | Dimensione cache             |
 | HTTP_MAX_REDIRECTS            | 30      | Limite redirect              |
@@ -237,7 +240,7 @@ sanitizelinkbot/
 ├── telegram_handlers.py # handler dei comandi e messaggi Telegram
 ├── telegram_io.py       # parsing messaggi e formatting risposte
 ├── url_translator.py    # traduzione verso frontend alternativi
-├── urlscan_client.py    # client per le API urlscan.io
+├── scanmalware_client.py # client per le API ScanMalware.com
 └── utils.py             # utilità condivise (logger, render template, …)
 
 data/                    # cache di ClearURLs e Debounce (generata automaticamente)

@@ -533,7 +533,7 @@ class TestSanitizeUrlImplFallback:
             valida_link_post_pulizia=True,
             max_unwrap_hops=3,
             max_consent_hops=3,
-            urlscan_api_key=None,
+            scanmalware_api_key=None,
             log_level="DEBUG",
         )
         san = Sanitizer(
@@ -607,7 +607,7 @@ def _make_sanitizer(exact_keys=frozenset(), *, aggressive=True) -> Sanitizer:
         valida_link_post_pulizia=True,
         max_unwrap_hops=3,
         max_consent_hops=3,
-        urlscan_api_key=None,
+        scanmalware_api_key=None,
         log_level="DEBUG",
         aggressive_query_strip=aggressive,
     )
